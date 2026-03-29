@@ -1,0 +1,21 @@
+name: Require Linked Issue
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+jobs:
+  check-issue-link:
+    name: Check for linked issue
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR body for issue reference
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if echo "$PR_BODY" | grep -iqE '(fix(es|ed)?|close[sd]?|resolve[sd]?)\s+#[0-9]+'; then
+            echo "Found linked issue reference"
+          else
+            echo "::error::PR body must link an issue using 'Fixes #N', 'Closes #N', or 'Resolves #N'"
+            exit 1
+          fi
