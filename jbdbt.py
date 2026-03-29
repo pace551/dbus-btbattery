@@ -1,13 +1,21 @@
-from bluepy.btle import Peripheral, DefaultDelegate, BTLEException, BTLEDisconnectError
-from threading import Thread, Lock
+import asyncio
+import threading
+from bleak import BleakClient, BleakError
+from threading import Lock
 from battery import Protection, Battery, Cell
 from utils import *
 from struct import *
-import sys
 import time
 import binascii
 import os
 
+# JBD BMS standard GATT UUIDs
+BLE_TX_UUID = "0000ff02-0000-1000-8000-00805f9b34fb"  # Write commands
+BLE_RX_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"  # Receive notifications
+
+# JBD BMS command bytes
+CMD_GENERAL_INFO = b'\xdd\xa5\x03\x00\xff\xfd\x77'
+CMD_CELL_VOLTAGES = b'\xdd\xa5\x04\x00\xff\xfc\x77'
 
 
 class JbdProtection(Protection):
@@ -51,11 +59,8 @@ class JbdProtection(Protection):
 
 
 
-class JbdBtDev(DefaultDelegate, Thread):
+class BleakJbdDev:
 	def __init__(self, address):
-		DefaultDelegate.__init__(self)
-		Thread.__init__(self)
-
 		self.cellDataCallback = None
 		self.cellData = None
 		self.cellDataTotalLen = 0
@@ -69,11 +74,9 @@ class JbdBtDev(DefaultDelegate, Thread):
 
 		self.address = address
 		self.interval = BT_POLL_INTERVAL
-
-		# Bluepy stuff
-		self.bt = Peripheral()
-		self.bt.setDelegate(self)
-
+		self.running = False
+		self._loop = None
+		self._thread = None
 
 	def reset(self):
 		self.last_state = "0000"
@@ -82,49 +85,45 @@ class JbdBtDev(DefaultDelegate, Thread):
 		self.generalDataTotalLen = 0
 		self.generalDataRemainingLen = 0
 
-
-	def run(self):
-		self.running = True
-		timer = 0
-		connected = False
-		while self.running:
-			if not connected:
-				try:
-					logger.info('Connecting ' + self.address)
-					self.bt.connect(self.address, addrType="public")
-					logger.info('Connected ' + self.address)
-					connected = True
-					self.reset()
-				except BTLEException as ex:
-					logger.info('Connection failed: ' + str(ex))
-					time.sleep(3)
-					continue
-
-			try:
-				if self.bt.waitForNotifications(2):
-					continue
-
-				if (time.monotonic() - timer) > self.interval:
-					timer = time.monotonic()
-					result = self.bt.writeCharacteristic(0x15, b'\xdd\xa5\x03\x00\xff\xfd\x77', True)	# write x03 (general info)
-					#time.sleep(1) # Need time between writes?
-					while self.bt.waitForNotifications(1):
-						continue
-					result = self.bt.writeCharacteristic(0x15, b'\xdd\xa5\x04\x00\xff\xfc\x77', True)	# write x04 (cell voltages)
-
-
-			except BTLEDisconnectError:
-				logger.info('Disconnected')
-				connected = False
-				continue
-
-
 	def connect(self):
-		self.daemon=True
-		self.start()
+		self.running = True
+		self._loop = asyncio.new_event_loop()
+		self._thread = threading.Thread(target=self._run_loop, daemon=True)
+		self._thread.start()
+
+	def _run_loop(self):
+		asyncio.set_event_loop(self._loop)
+		self._loop.run_until_complete(self._ble_main_loop())
+
+	async def _ble_main_loop(self):
+		while self.running:
+			try:
+				logger.info('Connecting ' + self.address)
+				async with BleakClient(self.address) as client:
+					logger.info('Connected ' + self.address)
+					self.reset()
+
+					await client.start_notify(BLE_RX_UUID, self._notification_handler)
+
+					while self.running and client.is_connected:
+						await client.write_gatt_char(BLE_TX_UUID, CMD_GENERAL_INFO, response=True)
+						await asyncio.sleep(0.5)
+						await client.write_gatt_char(BLE_TX_UUID, CMD_CELL_VOLTAGES, response=True)
+						await asyncio.sleep(self.interval)
+
+			except BleakError as ex:
+				logger.info('Connection failed: ' + str(ex))
+			except Exception as ex:
+				logger.info('BLE error: ' + str(ex))
+
+			if self.running:
+				logger.info('Disconnected')
+				await asyncio.sleep(3)
 
 	def stop(self):
 		self.running = False
+		if self._loop and self._loop.is_running():
+			self._loop.call_soon_threadsafe(self._loop.stop)
 
 	def addCellDataCallback(self, func):
 		self.cellDataCallback = func
@@ -132,49 +131,42 @@ class JbdBtDev(DefaultDelegate, Thread):
 	def addGeneralDataCallback(self, func):
 		self.generalDataCallback = func
 
-	def handleNotification(self, cHandle, data):
+	def _notification_handler(self, sender, data):
 		if data is None:
 			logger.info("data is None")
 			return
 
 		hex_data = binascii.hexlify(data)
-		hex_string = hex_data.decode('utf-8')		
-		#logger.info("new Hex_String(" +str(len(data))+"): " + str(hex_string))
+		hex_string = hex_data.decode('utf-8')
 
-
-		HEADER_LEN = 4 #[Start Code][Command][Status][Length]
-		FOOTER_LEN = 3 #[16bit Checksum][Stop Code]
+		HEADER_LEN = 4  # [Start Code][Command][Status][Length]
+		FOOTER_LEN = 3  # [16bit Checksum][Stop Code]
 
 		# Route incoming BMS data
 
 		# Cell Data
 		if hex_string.find('dd04') != -1:
 			self.last_state = "dd04"
-			# Because of small MTU size, the BMS data may not be transmitted in a single packet.
-			# We use the 4th byte defined as "data len" in the BMS protocol to calculate the remaining bytes
-			# that will be transmitted in the second packet
 			self.cellDataTotalLen = data[3] + HEADER_LEN + FOOTER_LEN
 			self.cellDataRemainingLen = self.cellDataTotalLen - len(data)
 			logger.info("cellDataTotalLen: " + str(int(self.cellDataTotalLen)))
-			#logger.info("cellDataRemainingLen: " + str(int(self.cellDataRemainingLen)))
 			self.cellData = data
-		elif self.last_state == "dd04" and hex_string.find('dd04') == -1 and hex_string.find('dd03') == -1: 
+		elif self.last_state == "dd04" and hex_string.find('dd04') == -1 and hex_string.find('dd03') == -1:
 			self.cellData = self.cellData + data
-				
+
 		# General Data
 		elif hex_string.find('dd03') != -1:
 			self.last_state = "dd03"
 			self.generalDataTotalLen = data[3] + HEADER_LEN + FOOTER_LEN
 			self.generalDataRemainingLen = self.generalDataTotalLen - len(data)
 			logger.info("generalDataTotalLen: " + str(int(self.generalDataTotalLen)))
-			#logger.info("generalDataRemainingLen: " + str(int(self.generalDataRemainingLen)))
 			self.generalData = data
-		elif self.last_state == "dd03" and hex_string.find('dd04') == -1 and hex_string.find('dd03') == -1: 
-			self.generalData = self.generalData + data			
+		elif self.last_state == "dd03" and hex_string.find('dd04') == -1 and hex_string.find('dd03') == -1:
+			self.generalData = self.generalData + data
 
 		if self.last_state == "dd04" and self.cellData and len(self.cellData) == self.cellDataTotalLen:
 			self.cellDataCallback(self.cellData)
-			logger.info("cellData(" + str(len(self.cellData))+ "): " + str(binascii.hexlify(self.cellData).decode('utf-8')))
+			logger.info("cellData(" + str(len(self.cellData)) + "): " + str(binascii.hexlify(self.cellData).decode('utf-8')))
 			self.last_state = "0000"
 			self.cellData = None
 
@@ -191,10 +183,6 @@ class JbdBt(Battery):
 		self.protection = JbdProtection()
 		self.type = "JBD BT"
 
-		# Bluepy stuff
-		self.bt = Peripheral()
-		self.bt.setDelegate(self)
-
 		self.mutex = Lock()
 		self.generalData = None
 		self.generalDataTS = time.monotonic()
@@ -205,7 +193,7 @@ class JbdBt(Battery):
 		self.port = "/bt" + address.replace(":", "")
 		self.interval = BT_POLL_INTERVAL
 
-		dev = JbdBtDev(self.address)
+		dev = BleakJbdDev(self.address)
 		dev.addCellDataCallback(self.cellDataCB)
 		dev.addGeneralDataCallback(self.generalDataCB)
 		dev.connect()

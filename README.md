@@ -6,6 +6,10 @@ Raspberry Pi running the VenusOS v2.92 image).
 The driver will communicate with a Battery Management System (BMS)
 via Bluetooth and publish this data to the VenusOS system.
 
+**Requires Python 3.** BLE communication uses
+[bleak](https://github.com/hbldh/bleak) (pure Python, no
+compilation needed).
+
 This project is derived from Louis Van Der Walt's dbus-serialbattery
 found here:
 <https://github.com/Louisvdw/dbus-serialbattery>
@@ -26,16 +30,11 @@ You need to setup some dependencies on your VenusOS first
    `opkg update`
 4. Install pip:
    `opkg install python3-pip`
-5. Install build essentials as bluepy has some C code that needs
-   to be compiled:
-   `opkg install packagegroup-core-buildessential`
-6. Install glib-dev required by bluepy:
-   `opkg install libglib-2.0-dev`
-7. Install bluepy:
-   `pip3 install bluepy`
-8. Install git:
+5. Install bleak (pure Python BLE library):
+   `pip3 install bleak`
+6. Install git:
    `opkg install git`
-9. Clone dbus-btbattery repo:
+7. Clone dbus-btbattery repo:
 
 ```sh
 cd /opt/victronenergy/
