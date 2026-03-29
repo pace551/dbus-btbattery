@@ -3,15 +3,11 @@ from threading import Thread, Lock
 from battery import Protection, Battery, Cell
 from utils import *
 from struct import *
-import argparse
 import sys
 import time
 import binascii
-import atexit
 import os
 
-# 0 disabled, or set the number of seconds to detect BT hang, and reboot.
-BT_WATCHDOG_TIMER=300
 
 
 class JbdProtection(Protection):
@@ -37,19 +33,19 @@ class JbdProtection(Protection):
 
 	def set_short(self, value):
 		self.short = value
-		self.set_cell_imbalance(
+		self.internal_failure = (
 			2 if self.short or self.IC_inspection or self.software_lock else 0
 		)
 
 	def set_ic_inspection(self, value):
 		self.IC_inspection = value
-		self.set_cell_imbalance(
+		self.internal_failure = (
 			2 if self.short or self.IC_inspection or self.software_lock else 0
 		)
 
 	def set_software_lock(self, value):
 		self.software_lock = value
-		self.set_cell_imbalance(
+		self.internal_failure = (
 			2 if self.short or self.IC_inspection or self.software_lock else 0
 		)
 
@@ -72,7 +68,7 @@ class JbdBtDev(DefaultDelegate, Thread):
 		self.generalDataRemainingLen = 0
 
 		self.address = address
-		self.interval = 5
+		self.interval = BT_POLL_INTERVAL
 
 		# Bluepy stuff
 		self.bt = Peripheral()
@@ -176,16 +172,16 @@ class JbdBtDev(DefaultDelegate, Thread):
 		elif self.last_state == "dd03" and hex_string.find('dd04') == -1 and hex_string.find('dd03') == -1: 
 			self.generalData = self.generalData + data			
 
-		if self.last_state == "dd04" and self.cellData and len(self.cellData) == self.cellDataTotalLen:			
+		if self.last_state == "dd04" and self.cellData and len(self.cellData) == self.cellDataTotalLen:
 			self.cellDataCallback(self.cellData)
 			logger.info("cellData(" + str(len(self.cellData))+ "): " + str(binascii.hexlify(self.cellData).decode('utf-8')))
-			self.last_state == "0000"
+			self.last_state = "0000"
 			self.cellData = None
 
-		if self.last_state == "dd03" and self.generalData and len(self.generalData) == self.generalDataTotalLen:			
+		if self.last_state == "dd03" and self.generalData and len(self.generalData) == self.generalDataTotalLen:
 			self.generalDataCallback(self.generalData)
 			logger.info("generalData(" + str(len(self.generalData)) + "): " + str(binascii.hexlify(self.generalData).decode('utf-8')))
-			self.last_state == "0000"
+			self.last_state = "0000"
 			self.generalData = None
 
 class JbdBt(Battery):
@@ -207,7 +203,7 @@ class JbdBt(Battery):
 
 		self.address = address
 		self.port = "/bt" + address.replace(":", "")
-		self.interval = 5
+		self.interval = BT_POLL_INTERVAL
 
 		dev = JbdBtDev(self.address)
 		dev.addCellDataCallback(self.cellDataCB)
@@ -255,11 +251,11 @@ class JbdBt(Battery):
 		)
 
 		# extra protection flags for LltJbd
-		self.protection.set_voltage_low_cell = is_bit_set(tmp[11])
-		self.protection.set_voltage_high_cell = is_bit_set(tmp[12])
-		self.protection.set_software_lock = is_bit_set(tmp[0])
-		self.protection.set_IC_inspection = is_bit_set(tmp[1])
-		self.protection.set_short = is_bit_set(tmp[2])
+		self.protection.set_voltage_low_cell(is_bit_set(tmp[11]))
+		self.protection.set_voltage_high_cell(is_bit_set(tmp[12]))
+		self.protection.set_software_lock(is_bit_set(tmp[0]))
+		self.protection.set_ic_inspection(is_bit_set(tmp[1]))
+		self.protection.set_short(is_bit_set(tmp[2]))
 
 	def to_cell_bits(self, byte_data, byte_data_high):
 		# clear the list
@@ -349,7 +345,7 @@ class JbdBt(Battery):
 				cell_volts = unpack_from(">H", cell_data, c * 2)
 				if len(cell_volts) != 0:
 					self.cells[c].voltage = cell_volts[0] / 1000
-			except struct.error:
+			except error:
 				self.cells[c].voltage = 0
 
 		return True
