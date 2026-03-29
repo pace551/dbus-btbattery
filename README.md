@@ -1,6 +1,6 @@
 # dbus-btbattery
 
-This is a driver for VenusOS devices (as of yet only tested on
+This is a driver for VenusOS devices (originally tested on
 Raspberry Pi running the VenusOS v2.92 image).
 
 The driver will communicate with a Battery Management System (BMS)
@@ -10,14 +10,17 @@ via Bluetooth and publish this data to the VenusOS system.
 [bleak](https://github.com/hbldh/bleak) (pure Python, no
 compilation needed).
 
-This project is derived from Louis Van Der Walt's dbus-serialbattery
-found here:
-<https://github.com/Louisvdw/dbus-serialbattery>
+This project is a fork of Brad Cagle's
+[dbus-btbattery](https://github.com/bradcagle/dbus-btbattery),
+which is derived from Louis Van Der Walt's
+[dbus-serialbattery](https://github.com/Louisvdw/dbus-serialbattery).
+This fork adds parallel battery support, migrates from bluepy to
+bleak, and targets Python 3 / VenusOS compatibility.
 
 ## Instructions
 
-To get started you need a VenusOS device. I've only tried on
-Raspberry Pi, you can follow my instructions here:
+To get started you need a VenusOS device. You can follow
+Brad's instructions here:
 <https://www.youtube.com/watch?v=yvGdNOZQ0Rw>
 to set one up.
 
@@ -38,7 +41,7 @@ You need to setup some dependencies on your VenusOS first
 
 ```sh
 cd /opt/victronenergy/
-git clone https://github.com/bradcagle/dbus-btbattery.git
+git clone https://github.com/pace551/dbus-btbattery.git
 ```
 
 Then from the `dbus-btbattery` directory you can run:
