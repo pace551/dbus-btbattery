@@ -1,8 +1,6 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
-from typing import Union
 
-from time import sleep
 from dbus.mainloop.glib import DBusGMainLoop
 from threading import Thread
 import sys
@@ -12,74 +10,86 @@ if sys.version_info.major == 2:
 else:
 	from gi.repository import GLib as gobject
 
-# Victron packages
-# from ve_utils import exit_on_error
-
 from dbushelper import DbusHelper
 from utils import logger
 import utils
-from battery import Battery
 from jbdbt import JbdBt
-from virtual import Virtual
-
+import jbdbt
+from serial import SeriesBattery
+from parallel import ParallelBattery
+from dbus_btbattery_cli import parse_args
 
 
 logger.info("Starting dbus-btbattery")
 
 
 def main():
-	def poll_battery(loop):
-		# Run in separate thread. Pass in the mainloop so the thread can kill us if there is an exception.
-		poller = Thread(target=lambda: helper.publish_battery(loop))
-		# Thread will die with us if deamon
-		poller.daemon = True
-		poller.start()
-		return True
-
-
-	def get_btaddr() -> str:
-		# Get the bluetooth address we need to use from the argument
-		if len(sys.argv) > 1:
-			return sys.argv[1:]
-		else:
-			return False
-
-
 	logger.info(
 		"dbus-btbattery v" + str(utils.DRIVER_VERSION) + utils.DRIVER_SUBVERSION
 	)
 
-	btaddr = get_btaddr()
-	if len(btaddr) == 2:
-		battery: Battery = Virtual( JbdBt(btaddr[0]), JbdBt(btaddr[1]) )
-	elif len(btaddr) == 3:
-		battery: Battery = Virtual( JbdBt(btaddr[0]), JbdBt(btaddr[1]), JbdBt(btaddr[2]) )
-	elif len(btaddr) == 4:
-		battery: Battery = Virtual( JbdBt(btaddr[0]), JbdBt(btaddr[1]), JbdBt(btaddr[2]), JbdBt(btaddr[3]) )
-	else:
-		battery: Battery = JbdBt(btaddr[0])
+	args = parse_args()
 
-	if battery is None:
-		logger.error("ERROR >>> No battery connection at " + str(btaddr))
+	if not args.addresses:
+		logger.error("ERROR >>> No Bluetooth addresses provided")
 		sys.exit(1)
 
-	battery.log_settings()
+	# Apply timing overrides to utils module
+	utils.BT_POLL_INTERVAL = args.bt_poll_interval
+	utils.BT_WATCHDOG_TIMER = args.bt_watchdog_timer
+	utils.DBUS_POLL_INTERVAL = args.dbus_poll_interval
 
-	# Have a mainloop, so we can send/receive asynchronous calls to and from dbus
+	# Apply timing overrides - must set on both utils and jbdbt modules
+	# because jbdbt uses 'from utils import *' (copies at import time)
+	jbdbt.BT_POLL_INTERVAL = args.bt_poll_interval
+	jbdbt.BT_WATCHDOG_TIMER = args.bt_watchdog_timer
+
+	# Create JbdBt instances
+	batteries = [JbdBt(addr) for addr in args.addresses]
+
+	helpers = []
+
+	if args.mode == 'parallel':
+		# Register aggregate first to get lowest instance number
+		aggregate = ParallelBattery(batteries)
+		aggregate.log_settings()
+		helpers.append(DbusHelper(aggregate))
+		# Then register individual batteries
+		for batt in batteries:
+			batt.log_settings()
+			helpers.append(DbusHelper(batt))
+		logger.info(f"Parallel mode: {len(batteries)} individual + 1 aggregate = {len(helpers)} D-Bus services")
+
+	elif args.mode == 'series':
+		aggregate = SeriesBattery(batteries)
+		aggregate.log_settings()
+		helpers.append(DbusHelper(aggregate))
+		logger.info(f"Series mode: {len(batteries)} batteries combined into 1 D-Bus service")
+
+	else:
+		batt = batteries[0]
+		batt.log_settings()
+		helpers.append(DbusHelper(batt))
+		logger.info("Single battery mode")
+
 	DBusGMainLoop(set_as_default=True)
 	if sys.version_info.major == 2:
 		gobject.threads_init()
 	mainloop = gobject.MainLoop()
 
-	# Get the initial values for the battery used by setup_vedbus
-	helper = DbusHelper(battery)
+	for helper in helpers:
+		if not helper.setup_vedbus():
+			logger.error("ERROR >>> Problem setting up vedbus for " + str(helper.battery.port))
+			sys.exit(1)
 
-	if not helper.setup_vedbus():
-		logger.error("ERROR >>> Problem with battery " + str(btaddr))
-		sys.exit(1)
+	def poll_all_batteries(loop):
+		for helper in helpers:
+			poller = Thread(target=lambda h=helper: h.publish_battery(loop))
+			poller.daemon = True
+			poller.start()
+		return True
 
-	# Poll the battery at INTERVAL and run the main loop
-	gobject.timeout_add(battery.poll_interval, lambda: poll_battery(mainloop))
+	gobject.timeout_add(args.dbus_poll_interval, lambda: poll_all_batteries(mainloop))
 	try:
 		mainloop.run()
 	except KeyboardInterrupt:

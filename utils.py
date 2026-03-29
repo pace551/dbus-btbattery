@@ -221,6 +221,13 @@ PUBLISH_CONFIG_VALUES = int(config["DEFAULT"]["PUBLISH_CONFIG_VALUES"])
 
 BMS_TYPE = config["DEFAULT"]["BMS_TYPE"]
 
+# Connection settings
+CONNECTION_MODE = config["DEFAULT"]["CONNECTION_MODE"]
+BT_ADDRESSES = _get_list_from_config("DEFAULT", "BT_ADDRESSES")
+BT_POLL_INTERVAL = int(config["DEFAULT"]["BT_POLL_INTERVAL"])
+BT_WATCHDOG_TIMER = int(config["DEFAULT"]["BT_WATCHDOG_TIMER"])
+DBUS_POLL_INTERVAL = int(config["DEFAULT"]["DBUS_POLL_INTERVAL"])
+
 
 def constrain(val, min_val, max_val):
     if min_val > max_val:

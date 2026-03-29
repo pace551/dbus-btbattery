@@ -1,31 +1,17 @@
-from battery import Protection, Battery, Cell
+from battery import Battery, Cell
 from utils import *
-from struct import *
-import argparse
-import sys
-import time
-import binascii
-import atexit
 
 
 
-class Virtual(Battery):
-	def __init__(self, b1=None, b2=None, b3=None, b4=None):
+class SeriesBattery(Battery):
+	def __init__(self, batts=None):
 		Battery.__init__(self, 0, 0, 0)
 
-		self.type = "Virtual"
+		self.type = "Series"
 		self.port = "/" + self.type
 
-		self.batts = []
-		if b1:
-			self.batts.append(b1)
-		if b2:
-			self.batts.append(b2)
-		if b3:
-			self.batts.append(b3)
-		if b4:
-			self.batts.append(b4)
-		
+		self.batts = list(batts) if batts else []
+
 
 	def test_connection(self):
 		return False
@@ -46,21 +32,21 @@ class Virtual(Battery):
 		result = False
 		# Loop through all batteries
 		for b in self.batts:
-			result = b.get_settings();
+			result = b.get_settings()
 			if result:
 				# Add battery voltages together
 				self.voltage += b.voltage
-			
+
 				# Add cell counts
 				self.cell_count += b.cell_count
 
 				# Add current values, and div by cell count after the loop to get avg
 				self.current += b.current
 
-				# Use the highest cycle count 
+				# Use the highest cycle count
 				if b.cycles > self.cycles:
 					self.cycles = b.cycles
-				
+
 				# Use the lowest capacity value
 				if b.capacity < self.capacity or self.capacity == 0:
 					self.capacity = b.capacity
@@ -73,8 +59,8 @@ class Virtual(Battery):
 				if b.soc < self.soc or self.soc == 0:
 					self.soc = b.soc
 
-				self.charge_fet &= b.charge_fet 
-				self.discharge_fet &= b.discharge_fet 
+				self.charge_fet &= b.charge_fet
+				self.discharge_fet &= b.discharge_fet
 
 
 		self.cells = [None]*self.cell_count
@@ -108,7 +94,7 @@ class Virtual(Battery):
 		result2 = False
 		# Loop through all batteries
 		for b in self.batts:
-			result2 = b.refresh_data();
+			result2 = b.refresh_data()
 			if result2:
 				# Append cells list
 				self.cells += b.cells
@@ -122,41 +108,3 @@ class Virtual(Battery):
 		# Override log_settings() to call get_settings() first
 		self.get_settings()
 		Battery.log_settings(self)
-
-
-
-
-
-# Unit test
-if __name__ == "__main__":
-	from jbdbt import JbdBt
-
-	batt1 = JbdBt( "70:3e:97:08:00:62" )
-	batt2 = JbdBt( "a4:c1:37:40:89:5e" )
-
-	vbatt = Virtual(batt1, batt2)
-
-	vbatt.get_settings()
-
-	print("Cells " + str(vbatt.cell_count) )
-	print("Voltage " + str(vbatt.voltage) )
-
-	while True:
-		vbatt.refresh_data()
-
-		print("Cells " + str(vbatt.cell_count) )
-		print("Voltage " + str(vbatt.voltage) )
-		print("Current " + str(vbatt.current) )
-		print("Charge FET " + str(vbatt.charge_fet) )
-		print("Discharge FET " + str(vbatt.discharge_fet) )
-
-		for c in range(vbatt.cell_count):
-			print( str(vbatt.cells[c].voltage) + "v", end=" " )
-
-		print("")
-
-
-		time.sleep(5)
-
-
-
