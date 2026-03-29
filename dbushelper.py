@@ -37,6 +37,7 @@ class DbusHelper:
             "com.victronenergy.battery."
             + self.battery.port[self.battery.port.rfind("/") + 1 :],
             get_bus(),
+            register=False,
         )
 
     def setup_instance(self):
@@ -303,6 +304,9 @@ class DbusHelper:
         logger.info(f"publish config values = {PUBLISH_CONFIG_VALUES}")
         if PUBLISH_CONFIG_VALUES == 1:
             publish_config_variables(self._dbusservice)
+
+        # Register on D-Bus after all paths are added (avoids race condition)
+        self._dbusservice.register()
 
         return True
 

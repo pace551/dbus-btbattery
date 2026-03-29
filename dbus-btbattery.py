@@ -5,10 +5,7 @@ from dbus.mainloop.glib import DBusGMainLoop
 from threading import Thread
 import sys
 
-if sys.version_info.major == 2:
-	import gobject
-else:
-	from gi.repository import GLib as gobject
+from gi.repository import GLib as gobject
 
 from dbushelper import DbusHelper
 from utils import logger
@@ -73,8 +70,6 @@ def main():
 		logger.info("Single battery mode")
 
 	DBusGMainLoop(set_as_default=True)
-	if sys.version_info.major == 2:
-		gobject.threads_init()
 	mainloop = gobject.MainLoop()
 
 	for helper in helpers:
