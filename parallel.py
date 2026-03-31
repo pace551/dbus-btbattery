@@ -149,6 +149,26 @@ class ParallelBattery(Battery):
 		return result and any_refreshed
 
 
+	def manage_charge_current(self):
+		# The base class CCCM methods use absolute current values from utils
+		# (computed at import time from MAX_BATTERY_CHARGE_CURRENT), so they
+		# always return single-battery limits regardless of self.max_battery_charge_current.
+		# Instead, run each sub-battery's calculation and sum the results.
+		charge_total = 0
+		discharge_total = 0
+		for b in self.batts:
+			b.manage_charge_current()
+			if b.control_charge_current is not None:
+				charge_total += b.control_charge_current
+			if b.control_discharge_current is not None:
+				discharge_total += b.control_discharge_current
+
+		self.control_charge_current = min(charge_total, self.max_battery_charge_current)
+		self.control_discharge_current = min(discharge_total, self.max_battery_discharge_current)
+		self.control_allow_charge = self.control_charge_current > 0
+		self.control_allow_discharge = self.control_discharge_current > 0
+
+
 	def log_settings(self):
 		self.get_settings()
 		Battery.log_settings(self)
