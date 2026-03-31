@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
-from bluepy.btle import Scanner, DefaultDelegate
+import asyncio
+from bleak import BleakScanner
 
-class ScanDelegate(DefaultDelegate):
-	def __init__(self):
-		DefaultDelegate.__init__(self)
 
-	def handleDiscovery(self, dev, isNewDev, isNewData):
-		if isNewDev:
-			print( "Discovered device ", dev.addr)
-		elif isNewData:
-			print( "Received new data from ", dev.addr)
+async def main():
+    print("Scanning for 10 seconds...")
+    devices = await BleakScanner.discover(timeout=10.0)
+    for dev in sorted(devices, key=lambda d: d.rssi, reverse=True):
+        print(f"Device {dev.address}, RSSI={dev.rssi} dB, Name={dev.name or '(unknown)'}")
 
-scanner = Scanner().withDelegate(ScanDelegate())
-devices = scanner.scan(10.0)
 
-for dev in devices:
-	print( "Device %s (%s), RSSI=%d dB" % (dev.addr, dev.addrType, dev.rssi) )
-	for (adtype, desc, value) in dev.getScanData():
-		print( "  %s = %s" % (desc, value) )
+asyncio.run(main())
