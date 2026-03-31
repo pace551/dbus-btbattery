@@ -65,12 +65,18 @@ class JbdProtection(Protection):
 _ble_loop: asyncio.AbstractEventLoop | None = None
 _ble_loop_lock = threading.Lock()
 
+# Serializes BLE connect/scan operations: BlueZ only allows one active
+# discovery at a time, so concurrent connect() calls fail with InProgress.
+# Released once connected; polling runs concurrently without the lock.
+_ble_connect_lock: asyncio.Lock | None = None
+
 
 def _get_ble_loop() -> asyncio.AbstractEventLoop:
-	global _ble_loop
+	global _ble_loop, _ble_connect_lock
 	with _ble_loop_lock:
 		if _ble_loop is None or not _ble_loop.is_running():
 			_ble_loop = asyncio.new_event_loop()
+			_ble_connect_lock = asyncio.Lock()
 			t = threading.Thread(target=_ble_loop.run_forever, daemon=True)
 			t.start()
 		return _ble_loop
@@ -106,24 +112,31 @@ class BleakJbdDev:
 
 	async def _ble_main_loop(self):
 		while self.running:
+			client = BleakClient(self.address)
 			try:
 				logger.info('Connecting ' + self.address)
-				async with BleakClient(self.address) as client:
-					logger.info('Connected ' + self.address)
-					self.reset()
+				# Serialize the connect/scan phase — BlueZ allows only one
+				# active discovery at a time. Lock is released once connected
+				# so other batteries can connect while this one polls.
+				async with _ble_connect_lock:
+					await client.connect()
 
-					await client.start_notify(BLE_RX_UUID, self._notification_handler)
+				logger.info('Connected ' + self.address)
+				self.reset()
+				await client.start_notify(BLE_RX_UUID, self._notification_handler)
 
-					while self.running and client.is_connected:
-						await client.write_gatt_char(BLE_TX_UUID, CMD_GENERAL_INFO, response=True)
-						await asyncio.sleep(0.5)
-						await client.write_gatt_char(BLE_TX_UUID, CMD_CELL_VOLTAGES, response=True)
-						await asyncio.sleep(self.interval)
+				while self.running and client.is_connected:
+					await client.write_gatt_char(BLE_TX_UUID, CMD_GENERAL_INFO, response=True)
+					await asyncio.sleep(0.5)
+					await client.write_gatt_char(BLE_TX_UUID, CMD_CELL_VOLTAGES, response=True)
+					await asyncio.sleep(self.interval)
 
 			except BleakError as ex:
 				logger.info('Connection failed: ' + str(ex))
 			except Exception as ex:
 				logger.info('BLE error: ' + str(ex))
+			finally:
+				await client.disconnect()
 
 			if self.running:
 				logger.info('Disconnected')
