@@ -59,6 +59,23 @@ class JbdProtection(Protection):
 
 
 
+# Shared event loop for all BleakJbdDev instances.
+# bleak's dbus-fast backend binds internal state to the first loop it sees,
+# so all BLE coroutines must run on the same loop.
+_ble_loop: asyncio.AbstractEventLoop | None = None
+_ble_loop_lock = threading.Lock()
+
+
+def _get_ble_loop() -> asyncio.AbstractEventLoop:
+	global _ble_loop
+	with _ble_loop_lock:
+		if _ble_loop is None or not _ble_loop.is_running():
+			_ble_loop = asyncio.new_event_loop()
+			t = threading.Thread(target=_ble_loop.run_forever, daemon=True)
+			t.start()
+		return _ble_loop
+
+
 class BleakJbdDev:
 	def __init__(self, address):
 		self.cellDataCallback = None
@@ -75,8 +92,6 @@ class BleakJbdDev:
 		self.address = address
 		self.interval = BT_POLL_INTERVAL
 		self.running = False
-		self._loop = None
-		self._thread = None
 
 	def reset(self):
 		self.last_state = "0000"
@@ -87,13 +102,7 @@ class BleakJbdDev:
 
 	def connect(self):
 		self.running = True
-		self._loop = asyncio.new_event_loop()
-		self._thread = threading.Thread(target=self._run_loop, daemon=True)
-		self._thread.start()
-
-	def _run_loop(self):
-		asyncio.set_event_loop(self._loop)
-		self._loop.run_until_complete(self._ble_main_loop())
+		asyncio.run_coroutine_threadsafe(self._ble_main_loop(), _get_ble_loop())
 
 	async def _ble_main_loop(self):
 		while self.running:
@@ -271,7 +280,7 @@ class JbdBt(Battery):
 		self.mutex.acquire()
 		self.checkTS(self.generalDataTS)
 
-		if self.generalData == None:
+		if self.generalData is None:
 			self.mutex.release()
 			return False
 
@@ -318,7 +327,7 @@ class JbdBt(Battery):
 		self.mutex.acquire()
 		self.checkTS(self.cellDataTS)
 
-		if self.cellData == None:
+		if self.cellData is None:
 			self.mutex.release()
 			return False
 
