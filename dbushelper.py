@@ -20,10 +20,13 @@ from utils import *
 
 
 def get_bus():
+    # private=True creates a new connection each call; the default singleton
+    # connection causes KeyError when multiple VeDbusService instances each
+    # try to register the root '/' object-path handler on the same connection.
     return (
-        dbus.SessionBus()
+        dbus.SessionBus(private=True)
         if "DBUS_SESSION_BUS_ADDRESS" in os.environ
-        else dbus.SystemBus()
+        else dbus.SystemBus(private=True)
     )
 
 
