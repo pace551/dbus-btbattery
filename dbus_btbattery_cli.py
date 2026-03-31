@@ -29,15 +29,17 @@ def parse_args():
 	if not args.addresses and utils.BT_ADDRESSES:
 		args.addresses = utils.BT_ADDRESSES
 
-	# Resolve mode
+	# Resolve mode: CLI flags > config.ini > legacy fallback
 	if args.parallel:
 		args.mode = 'parallel'
 	elif args.series:
 		args.mode = 'series'
+	elif utils.CONNECTION_MODE in ('parallel', 'series'):
+		args.mode = utils.CONNECTION_MODE
 	elif len(args.addresses) > 1:
-		args.mode = 'series'  # legacy backwards compat
+		args.mode = 'series'  # legacy: multiple addresses without flag
 	else:
-		args.mode = utils.CONNECTION_MODE if utils.CONNECTION_MODE != 'single' else 'single'
+		args.mode = 'single'
 
 	# Resolve timing: CLI overrides config.ini
 	if args.bt_poll_interval is None:

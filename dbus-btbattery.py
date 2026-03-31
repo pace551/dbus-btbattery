@@ -22,6 +22,9 @@ logger.info("Starting dbus-btbattery")
 
 
 def main():
+	# Must be called before any D-Bus connections are made
+	DBusGMainLoop(set_as_default=True)
+
 	logger.info(
 		"dbus-btbattery v" + str(utils.DRIVER_VERSION) + utils.DRIVER_SUBVERSION
 	)
@@ -75,7 +78,6 @@ def main():
 		helpers.append(DbusHelper(batt))
 		logger.info("Single battery mode")
 
-	DBusGMainLoop(set_as_default=True)
 	mainloop = gobject.MainLoop()
 
 	for helper in helpers:
