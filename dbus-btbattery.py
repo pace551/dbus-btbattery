@@ -4,6 +4,7 @@
 from dbus.mainloop.glib import DBusGMainLoop
 from threading import Thread
 import sys
+import time
 
 from gi.repository import GLib as gobject
 
@@ -41,8 +42,13 @@ def main():
 	jbdbt.BT_POLL_INTERVAL = args.bt_poll_interval
 	jbdbt.BT_WATCHDOG_TIMER = args.bt_watchdog_timer
 
-	# Create JbdBt instances
-	batteries = [JbdBt(addr) for addr in args.addresses]
+	# Create JbdBt instances with a stagger between each to avoid
+	# overwhelming the BT adapter with simultaneous connection attempts
+	batteries = []
+	for i, addr in enumerate(args.addresses):
+		batteries.append(JbdBt(addr))
+		if i < len(args.addresses) - 1:
+			time.sleep(3)
 
 	helpers = []
 
