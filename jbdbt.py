@@ -171,7 +171,7 @@ class BleakJbdDev:
 			self.last_state = "dd04"
 			self.cellDataTotalLen = data[3] + HEADER_LEN + FOOTER_LEN
 			self.cellDataRemainingLen = self.cellDataTotalLen - len(data)
-			logger.info("cellDataTotalLen: " + str(int(self.cellDataTotalLen)))
+			logger.debug("cellDataTotalLen: " + str(int(self.cellDataTotalLen)))
 			self.cellData = data
 		elif self.last_state == "dd04" and hex_string.find('dd04') == -1 and hex_string.find('dd03') == -1:
 			self.cellData = self.cellData + data
@@ -181,20 +181,20 @@ class BleakJbdDev:
 			self.last_state = "dd03"
 			self.generalDataTotalLen = data[3] + HEADER_LEN + FOOTER_LEN
 			self.generalDataRemainingLen = self.generalDataTotalLen - len(data)
-			logger.info("generalDataTotalLen: " + str(int(self.generalDataTotalLen)))
+			logger.debug("generalDataTotalLen: " + str(int(self.generalDataTotalLen)))
 			self.generalData = data
 		elif self.last_state == "dd03" and hex_string.find('dd04') == -1 and hex_string.find('dd03') == -1:
 			self.generalData = self.generalData + data
 
 		if self.last_state == "dd04" and self.cellData and len(self.cellData) == self.cellDataTotalLen:
 			self.cellDataCallback(self.cellData)
-			logger.info("cellData(" + str(len(self.cellData)) + "): " + str(binascii.hexlify(self.cellData).decode('utf-8')))
+			logger.debug("cellData(" + str(len(self.cellData)) + "): " + str(binascii.hexlify(self.cellData).decode('utf-8')))
 			self.last_state = "0000"
 			self.cellData = None
 
 		if self.last_state == "dd03" and self.generalData and len(self.generalData) == self.generalDataTotalLen:
 			self.generalDataCallback(self.generalData)
-			logger.info("generalData(" + str(len(self.generalData)) + "): " + str(binascii.hexlify(self.generalData).decode('utf-8')))
+			logger.debug("generalData(" + str(len(self.generalData)) + "): " + str(binascii.hexlify(self.generalData).decode('utf-8')))
 			self.last_state = "0000"
 			self.generalData = None
 
