@@ -17,14 +17,73 @@ which is derived from Louis Van Der Walt's
 This fork adds parallel battery support, migrates from bluepy to
 bleak, and targets Python 3 / VenusOS compatibility.
 
-## Instructions
+## Installation
 
-To get started you need a VenusOS device. You can follow
-Brad's instructions here:
-<https://www.youtube.com/watch?v=yvGdNOZQ0Rw>
-to set one up.
+### Cerbo GX (recommended — survives firmware upgrades)
 
-You need to setup some dependencies on your VenusOS first
+`/opt/victronenergy/` is wiped on OTA firmware upgrades. Install to
+`/data/` instead, which is the persistent partition.
+
+SSH into your Cerbo GX, then:
+
+**1. One-time system setup:**
+```sh
+/opt/victronenergy/swupdate-scripts/resize2fs.sh
+opkg update
+opkg install python3-pip git
+pip3 install bleak
+```
+
+**2. Clone to `/data/` (persistent across firmware upgrades):**
+```sh
+cd /data
+git clone https://github.com/pace551/dbus-btbattery.git
+```
+
+**3. Symlink into `/opt/victronenergy/`:**
+```sh
+ln -sf /data/dbus-btbattery /opt/victronenergy/dbus-btbattery
+```
+
+**4. Configure your batteries in `config.ini`:**
+```sh
+cp /data/dbus-btbattery/default_config.ini /data/dbus-btbattery/config.ini
+vi /data/dbus-btbattery/config.ini
+```
+
+Set at minimum:
+```ini
+CONNECTION_MODE = parallel   # or single / series
+BT_ADDRESSES = AA:BB:CC:DD:EE:FF,11:22:33:44:55:66
+```
+
+**5. Install the service:**
+```sh
+cd /data/dbus-btbattery && ./installservice.sh
+```
+
+**6. Add to `/data/rc.local` so the symlink and service survive firmware upgrades:**
+```sh
+cat >> /data/rc.local << 'EOF'
+
+# dbus-btbattery
+ln -sf /data/dbus-btbattery /opt/victronenergy/dbus-btbattery
+if [ ! -d /opt/victronenergy/service/dbus-btbattery ]; then
+    mkdir -p /opt/victronenergy/service/dbus-btbattery
+    cp -a /data/dbus-btbattery/service/* /opt/victronenergy/service/dbus-btbattery/
+fi
+EOF
+chmod +x /data/rc.local
+```
+
+**7. Reboot.**
+
+---
+
+### Raspberry Pi 4 (testing)
+
+On RPi4 the firmware is updated by reflashing the SD card, so
+persistence is less of a concern. Clone directly to `/opt/victronenergy/`:
 
 1. SSH to IP assigned to venus device
 2. Resize/Expand file system:
@@ -44,24 +103,21 @@ cd /opt/victronenergy/
 git clone https://github.com/pace551/dbus-btbattery.git
 ```
 
-Then from the `dbus-btbattery` directory you can run:
+Configure `config.ini` as above, then:
 
 ```sh
-./dbus-btbattery.py 70:3e:97:08:00:62
+cd /opt/victronenergy/dbus-btbattery && ./installservice.sh
 ```
 
-Replace `70:3e:97:08:00:62` with the Bluetooth address of your
-BMS/Battery.
+Reboot.
 
 You can run `./scan.py` to find Bluetooth devices around you.
 
 ## To make dbus-btbattery startup automatically
 
-1. Edit `service/run` and replace `70:3e:97:08:00:62` with the
-   Bluetooth address of your BMS/Battery
-2. Save with "Ctrl O"
-3. Run `./installservice.sh`
-4. Reboot
+Configure `config.ini` with your MAC addresses and connection mode,
+then run `./installservice.sh` and reboot. The service reads
+`config.ini` automatically — no need to edit `service/run` directly.
 
 ## Multi-Battery Modes
 
