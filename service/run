@@ -3,6 +3,6 @@ exec 2>&1
 # Single battery:
 # exec /opt/victronenergy/dbus-btbattery/dbus-btbattery.py 70:3e:97:08:00:62
 # Parallel batteries:
-exec /opt/victronenergy/dbus-btbattery/dbus-btbattery.py --parallel 70:3e:97:08:00:62 a4:c1:37:40:89:5e a4:c1:37:00:25:91 a4:c1:37:00:25:92
+exec /opt/victronenergy/dbus-btbattery/dbus-btbattery.py
 # Series batteries:
 # exec /opt/victronenergy/dbus-btbattery/dbus-btbattery.py --series 70:3e:97:08:00:62 a4:c1:37:40:89:5e
