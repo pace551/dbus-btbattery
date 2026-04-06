@@ -22,6 +22,10 @@ def parse_args():
 						help='BT watchdog timer in seconds, 0 to disable')
 	parser.add_argument('--dbus-poll-interval', type=int, default=None,
 						help='D-Bus publish interval in milliseconds')
+	parser.add_argument('--bt-soft-reset-timeout', type=int, default=None,
+						help='Soft-reset timeout in seconds, 0 to disable')
+	parser.add_argument('--bt-reconnect-timeout', type=int, default=None,
+						help='BLE reconnect timeout in seconds, 0 to disable')
 
 	args = parser.parse_args()
 
@@ -48,5 +52,9 @@ def parse_args():
 		args.bt_watchdog_timer = utils.BT_WATCHDOG_TIMER
 	if args.dbus_poll_interval is None:
 		args.dbus_poll_interval = utils.DBUS_POLL_INTERVAL
+	if args.bt_soft_reset_timeout is None:
+		args.bt_soft_reset_timeout = utils.BT_SOFT_RESET_TIMEOUT
+	if args.bt_reconnect_timeout is None:
+		args.bt_reconnect_timeout = utils.BT_RECONNECT_TIMEOUT
 
 	return args

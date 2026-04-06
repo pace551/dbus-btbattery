@@ -89,6 +89,7 @@ class BleakJbdDev:
 		self.cellDataTotalLen = 0
 		self.cellDataRemainingLen = 0
 		self.last_state = "0000"
+		self._last_state_change_time = time.monotonic()
 
 		self.generalDataCallback = None
 		self.generalData = None
@@ -98,13 +99,36 @@ class BleakJbdDev:
 		self.address = address
 		self.interval = BT_POLL_INTERVAL
 		self.running = False
+		self.last_successful_callback_time = time.monotonic()
+		self.soft_reset_count = 0
+		self.reconnect_count = 0
 
 	def reset(self):
 		self.last_state = "0000"
+		self.cellData = None
+		self.generalData = None
 		self.cellDataTotalLen = 0
 		self.cellDataRemainingLen = 0
 		self.generalDataTotalLen = 0
 		self.generalDataRemainingLen = 0
+		self._last_state_change_time = time.monotonic()
+
+	def data_age(self):
+		"""Seconds since last successful data callback."""
+		return time.monotonic() - self.last_successful_callback_time
+
+	def soft_reset(self):
+		"""Reset the notification handler state machine without disconnecting BLE."""
+		logger.info(f'Soft reset ({self.address}): clearing state machine')
+		self.last_state = "0000"
+		self.cellData = None
+		self.generalData = None
+		self.cellDataTotalLen = 0
+		self.cellDataRemainingLen = 0
+		self.generalDataTotalLen = 0
+		self.generalDataRemainingLen = 0
+		self._last_state_change_time = time.monotonic()
+		self.soft_reset_count += 1
 
 	def connect(self):
 		self.running = True
@@ -126,10 +150,27 @@ class BleakJbdDev:
 				await client.start_notify(BLE_RX_UUID, self._notification_handler)
 
 				while self.running and client.is_connected:
-					await client.write_gatt_char(BLE_TX_UUID, CMD_GENERAL_INFO, response=True)
-					await asyncio.sleep(0.5)
-					await client.write_gatt_char(BLE_TX_UUID, CMD_CELL_VOLTAGES, response=True)
+					try:
+						await client.write_gatt_char(BLE_TX_UUID, CMD_GENERAL_INFO, response=True)
+						await asyncio.sleep(0.5)
+						await client.write_gatt_char(BLE_TX_UUID, CMD_CELL_VOLTAGES, response=True)
+					except Exception as ex:
+						logger.info(f'GATT write error ({self.address}): {ex}')
+						break
+
 					await asyncio.sleep(self.interval)
+
+					# Tiered recovery based on data staleness
+					try:
+						age = self.data_age()
+						if BT_RECONNECT_TIMEOUT and age > BT_RECONNECT_TIMEOUT:
+							logger.warning(f'Data stale for {age:.0f}s ({self.address}), forcing BLE reconnect')
+							self.reconnect_count += 1
+							break  # exits inner loop → disconnect/reconnect in outer loop
+						elif BT_SOFT_RESET_TIMEOUT and age > BT_SOFT_RESET_TIMEOUT:
+							self.soft_reset()
+					except Exception as ex:
+						logger.warning(f'Recovery check error ({self.address}): {ex}')
 
 			except BleakError as ex:
 				logger.info('Connection failed: ' + str(ex))
@@ -154,6 +195,16 @@ class BleakJbdDev:
 		self.generalDataCallback = func
 
 	def _notification_handler(self, sender, data):
+		try:
+			self._notification_handler_inner(data)
+		except Exception as ex:
+			logger.warning(f'Notification handler error ({self.address}): {ex}')
+			self.last_state = "0000"
+			self.cellData = None
+			self.generalData = None
+			self._last_state_change_time = time.monotonic()
+
+	def _notification_handler_inner(self, data):
 		if data is None:
 			logger.info("data is None")
 			return
@@ -164,38 +215,61 @@ class BleakJbdDev:
 		HEADER_LEN = 4  # [Start Code][Command][Status][Length]
 		FOOTER_LEN = 3  # [16bit Checksum][Stop Code]
 
-		# Route incoming BMS data
+		# Check for state machine timeout — if mid-reassembly for too long,
+		# reset so we can process fresh packets
+		if self.last_state != "0000":
+			elapsed = time.monotonic() - self._last_state_change_time
+			if elapsed > 10:
+				logger.warning(f'State machine timeout ({self.address}): '
+				               f'stuck in {self.last_state} for {elapsed:.0f}s, resetting')
+				self.last_state = "0000"
+				self.cellData = None
+				self.generalData = None
+				self._last_state_change_time = time.monotonic()
 
-		# Cell Data
-		if hex_string.find('dd04') != -1:
+		# Route incoming BMS data.
+		# When already mid-reassembly (state != "0000"), always append to the
+		# active buffer regardless of fragment content — header bytes are only
+		# meaningful at position 0 of the very first fragment.
+
+		if self.last_state == "dd04":
+			# Continuation fragment for cell data
+			self.cellData = self.cellData + data
+		elif self.last_state == "dd03":
+			# Continuation fragment for general data
+			self.generalData = self.generalData + data
+		elif hex_string[:4] == 'dd04':
+			# First fragment of a cell data packet
 			self.last_state = "dd04"
+			self._last_state_change_time = time.monotonic()
 			self.cellDataTotalLen = data[3] + HEADER_LEN + FOOTER_LEN
 			self.cellDataRemainingLen = self.cellDataTotalLen - len(data)
 			logger.debug("cellDataTotalLen: " + str(int(self.cellDataTotalLen)))
 			self.cellData = data
-		elif self.last_state == "dd04" and hex_string.find('dd04') == -1 and hex_string.find('dd03') == -1:
-			self.cellData = self.cellData + data
-
-		# General Data
-		elif hex_string.find('dd03') != -1:
+		elif hex_string[:4] == 'dd03':
+			# First fragment of a general data packet
 			self.last_state = "dd03"
+			self._last_state_change_time = time.monotonic()
 			self.generalDataTotalLen = data[3] + HEADER_LEN + FOOTER_LEN
 			self.generalDataRemainingLen = self.generalDataTotalLen - len(data)
 			logger.debug("generalDataTotalLen: " + str(int(self.generalDataTotalLen)))
 			self.generalData = data
-		elif self.last_state == "dd03" and hex_string.find('dd04') == -1 and hex_string.find('dd03') == -1:
-			self.generalData = self.generalData + data
 
-		if self.last_state == "dd04" and self.cellData and len(self.cellData) == self.cellDataTotalLen:
-			self.cellDataCallback(self.cellData)
-			logger.debug("cellData(" + str(len(self.cellData)) + "): " + str(binascii.hexlify(self.cellData).decode('utf-8')))
+		# Completion checks — use >= to handle oversized accumulation
+		if self.last_state == "dd04" and self.cellData and len(self.cellData) >= self.cellDataTotalLen:
+			self.cellDataCallback(self.cellData[:self.cellDataTotalLen])
+			self.last_successful_callback_time = time.monotonic()
+			logger.debug("cellData(" + str(self.cellDataTotalLen) + "): " + str(binascii.hexlify(self.cellData[:self.cellDataTotalLen]).decode('utf-8')))
 			self.last_state = "0000"
+			self._last_state_change_time = time.monotonic()
 			self.cellData = None
 
-		if self.last_state == "dd03" and self.generalData and len(self.generalData) == self.generalDataTotalLen:
-			self.generalDataCallback(self.generalData)
-			logger.debug("generalData(" + str(len(self.generalData)) + "): " + str(binascii.hexlify(self.generalData).decode('utf-8')))
+		if self.last_state == "dd03" and self.generalData and len(self.generalData) >= self.generalDataTotalLen:
+			self.generalDataCallback(self.generalData[:self.generalDataTotalLen])
+			self.last_successful_callback_time = time.monotonic()
+			logger.debug("generalData(" + str(self.generalDataTotalLen) + "): " + str(binascii.hexlify(self.generalData[:self.generalDataTotalLen]).decode('utf-8')))
 			self.last_state = "0000"
+			self._last_state_change_time = time.monotonic()
 			self.generalData = None
 
 class JbdBt(Battery):
@@ -214,11 +288,14 @@ class JbdBt(Battery):
 		self.address = address
 		self.port = "/bt" + address.replace(":", "")
 		self.interval = BT_POLL_INTERVAL
+		self.soft_reset_count = 0
+		self.reconnect_count = 0
 
 		dev = BleakJbdDev(self.address)
 		dev.addCellDataCallback(self.cellDataCB)
 		dev.addGeneralDataCallback(self.generalDataCB)
 		dev.connect()
+		self._ble_dev = dev
 
 
 	def test_connection(self):
@@ -236,6 +313,8 @@ class JbdBt(Battery):
 	def refresh_data(self):
 		result = self.read_gen_data()
 		result = result and self.read_cell_data()
+		self.soft_reset_count = self._ble_dev.soft_reset_count
+		self.reconnect_count = self._ble_dev.reconnect_count
 		return result
 
 	def log_settings(self):

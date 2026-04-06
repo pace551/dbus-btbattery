@@ -158,6 +158,8 @@ class DbusHelper:
             writeable=True,
             gettextcallback=lambda p, v: "{:0.2f}A".format(v),
         )
+        self._dbusservice.add_path("/Info/SoftResetCount", 0, writeable=True)
+        self._dbusservice.add_path("/Info/ReconnectCount", 0, writeable=True)
         self._dbusservice.add_path(
             "/System/NrOfCellsPerBattery", self.battery.cell_count, writeable=True
         )
@@ -321,27 +323,42 @@ class DbusHelper:
             if success:
                 self.error_count = 0
                 self.battery.online = True
+
+                # This is to mannage CCL\DCL
+                self.battery.manage_charge_current()
+
+                # This is to mannage CVCL
+                self.battery.manage_charge_voltage()
+
+                # publish all the data from the battery object to dbus
+                self.publish_dbus()
             else:
                 self.error_count += 1
-                # If the battery is offline for more than 10 polls (polled every second for most batteries)
                 if self.error_count >= 10:
-                    self.battery.online = False
+                    if self.battery.online:
+                        self.battery.online = False
+                        # Publish once to push offline status to D-Bus
+                        self.publish_dbus()
                 # Has it completely failed
                 if self.error_count >= 60:
                     loop.quit()
 
-            # This is to mannage CCL\DCL
-            self.battery.manage_charge_current()
+            # Always publish recovery counters regardless of data freshness
+            self.publish_counters()
 
-            # This is to mannage CVCL
-            self.battery.manage_charge_voltage()
-
-            # publish all the data from the battery object to dbus
-            self.publish_dbus()
-
-        except:
+        except Exception:
             traceback.print_exc()
             loop.quit()
+
+    def publish_counters(self):
+        """Publish recovery counters — always, even when data is stale."""
+        try:
+            if hasattr(self.battery, 'soft_reset_count'):
+                self._dbusservice["/Info/SoftResetCount"] = self.battery.soft_reset_count
+            if hasattr(self.battery, 'reconnect_count'):
+                self._dbusservice["/Info/ReconnectCount"] = self.battery.reconnect_count
+        except Exception:
+            pass  # counters are diagnostic, never fail the publish loop
 
     def publish_dbus(self):
 
