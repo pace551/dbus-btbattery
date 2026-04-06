@@ -123,35 +123,43 @@ class BleakJbdDev:
 
 	async def _ble_main_loop(self):
 		while self.running:
-			client = BleakClient(self.address)
 			success = False
+			client = BleakClient(self.address)
+			logger.info('Connecting ' + self.address)
 			try:
-				logger.info('Connecting ' + self.address)
-				# Serialize the connect phase — BlueZ allows only one active
-				# discovery at a time. Lock is released once connected.
+				# Hold the lock for the entire connect-read-disconnect cycle so
+				# only one battery uses the BLE radio at a time. Concurrent GATT
+				# sessions cause connection handshakes to drown out notifications,
+				# producing read timeouts on the other batteries.
 				async with _ble_connect_lock:
-					await client.connect()
-				logger.info('Connected ' + self.address)
+					try:
+						await client.connect()
+						logger.info('Connected ' + self.address)
 
-				# Fresh events and clean state machine for this read cycle.
-				# JbdBt's generalData/cellData (set by callbacks) are not cleared
-				# here — the dbus poller continues to see the previous read's data
-				# until the new callbacks fire.
-				self._general_event = asyncio.Event()
-				self._cell_event = asyncio.Event()
-				self.reset()
+						# Fresh events and clean state machine for this read cycle.
+						# JbdBt's generalData/cellData (set by callbacks) are not cleared
+						# here — the dbus poller continues to see the previous read's data
+						# until the new callbacks fire.
+						self._general_event = asyncio.Event()
+						self._cell_event = asyncio.Event()
+						self.reset()
 
-				await client.start_notify(BLE_RX_UUID, self._notification_handler)
+						await client.start_notify(BLE_RX_UUID, self._notification_handler)
 
-				await client.write_gatt_char(BLE_TX_UUID, CMD_GENERAL_INFO, response=True)
-				await asyncio.wait_for(self._general_event.wait(), timeout=READ_TIMEOUT)
+						await client.write_gatt_char(BLE_TX_UUID, CMD_GENERAL_INFO, response=True)
+						await asyncio.wait_for(self._general_event.wait(), timeout=READ_TIMEOUT)
 
-				await asyncio.sleep(0.5)
+						await asyncio.sleep(0.5)
 
-				await client.write_gatt_char(BLE_TX_UUID, CMD_CELL_VOLTAGES, response=True)
-				await asyncio.wait_for(self._cell_event.wait(), timeout=READ_TIMEOUT)
+						await client.write_gatt_char(BLE_TX_UUID, CMD_CELL_VOLTAGES, response=True)
+						await asyncio.wait_for(self._cell_event.wait(), timeout=READ_TIMEOUT)
 
-				success = True
+						success = True
+					finally:
+						try:
+							await client.disconnect()
+						except Exception:
+							pass
 
 			except asyncio.TimeoutError:
 				logger.warning(f'Read timeout ({self.address})')
@@ -159,11 +167,6 @@ class BleakJbdDev:
 				logger.info('Connection failed: ' + str(ex))
 			except Exception as ex:
 				logger.info('BLE error: ' + str(ex))
-			finally:
-				try:
-					await client.disconnect()
-				except Exception:
-					pass
 
 			if self.running:
 				if success:
