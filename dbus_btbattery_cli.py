@@ -17,15 +17,9 @@ def parse_args():
 						help='Bluetooth MAC addresses')
 
 	parser.add_argument('--bt-poll-interval', type=int, default=None,
-						help='BLE poll interval in seconds')
-	parser.add_argument('--bt-watchdog-timer', type=int, default=None,
-						help='BT watchdog timer in seconds, 0 to disable')
+						help='BLE poll interval in seconds (connect-read-disconnect cycle)')
 	parser.add_argument('--dbus-poll-interval', type=int, default=None,
 						help='D-Bus publish interval in milliseconds')
-	parser.add_argument('--bt-soft-reset-timeout', type=int, default=None,
-						help='Soft-reset timeout in seconds, 0 to disable')
-	parser.add_argument('--bt-reconnect-timeout', type=int, default=None,
-						help='BLE reconnect timeout in seconds, 0 to disable')
 
 	args = parser.parse_args()
 
@@ -48,13 +42,7 @@ def parse_args():
 	# Resolve timing: CLI overrides config.ini
 	if args.bt_poll_interval is None:
 		args.bt_poll_interval = utils.BT_POLL_INTERVAL
-	if args.bt_watchdog_timer is None:
-		args.bt_watchdog_timer = utils.BT_WATCHDOG_TIMER
 	if args.dbus_poll_interval is None:
 		args.dbus_poll_interval = utils.DBUS_POLL_INTERVAL
-	if args.bt_soft_reset_timeout is None:
-		args.bt_soft_reset_timeout = utils.BT_SOFT_RESET_TIMEOUT
-	if args.bt_reconnect_timeout is None:
-		args.bt_reconnect_timeout = utils.BT_RECONNECT_TIMEOUT
 
 	return args

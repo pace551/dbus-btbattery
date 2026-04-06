@@ -36,22 +36,13 @@ def main():
 
 	# Apply timing overrides to utils module
 	utils.BT_POLL_INTERVAL = args.bt_poll_interval
-	utils.BT_WATCHDOG_TIMER = args.bt_watchdog_timer
 	utils.DBUS_POLL_INTERVAL = args.dbus_poll_interval
 
-	# Apply timing overrides - must set on both utils and jbdbt modules
-	# because jbdbt uses 'from utils import *' (copies at import time)
+	# Apply timing override to jbdbt module — jbdbt uses 'from utils import *'
+	# which copies at import time, so the module-level var must be set directly.
 	jbdbt.BT_POLL_INTERVAL = args.bt_poll_interval
-	jbdbt.BT_WATCHDOG_TIMER = args.bt_watchdog_timer
-	jbdbt.BT_SOFT_RESET_TIMEOUT = args.bt_soft_reset_timeout
-	jbdbt.BT_RECONNECT_TIMEOUT = args.bt_reconnect_timeout
 
-	if args.bt_soft_reset_timeout and args.bt_soft_reset_timeout <= args.bt_poll_interval:
-		logger.warning(f"BT_SOFT_RESET_TIMEOUT ({args.bt_soft_reset_timeout}s) should be > BT_POLL_INTERVAL ({args.bt_poll_interval}s)")
-	if args.bt_reconnect_timeout and args.bt_reconnect_timeout <= args.bt_soft_reset_timeout:
-		logger.warning(f"BT_RECONNECT_TIMEOUT ({args.bt_reconnect_timeout}s) should be > BT_SOFT_RESET_TIMEOUT ({args.bt_soft_reset_timeout}s)")
-
-	# Create JbdBt instances — BLE connections are serialized via asyncio
+	# Create JbdBt instances — BLE connects are serialized via asyncio
 	# lock in jbdbt.py to avoid BlueZ InProgress errors
 	batteries = [JbdBt(addr) for addr in args.addresses]
 

@@ -187,57 +187,40 @@ def test_notification_handler_survives_exception():
 
 
 # ---------------------------------------------------------------------------
-# Staleness tracking and tiered recovery
+# Event signaling: notification handler sets asyncio events on completion
 # ---------------------------------------------------------------------------
 
-def test_successful_callback_updates_staleness_timestamp():
-    """last_successful_callback_time should update when a complete
-    packet is processed."""
+def test_cell_event_set_on_complete_packet():
+    """_cell_event should be set when a complete cell data packet is received."""
+    import asyncio
     dev = make_dev()
+    dev._cell_event = asyncio.Event()
 
-    before = time.monotonic()
     payload = bytes(8)
     packet = build_packet(0x04, payload)
     dev._notification_handler(None, packet)
-    after = time.monotonic()
 
-    assert dev.last_successful_callback_time >= before
-    assert dev.last_successful_callback_time <= after
+    assert dev._cell_event.is_set(), "_cell_event should be set after complete cell packet"
 
 
-def test_data_age_returns_seconds_since_last_callback():
-    """data_age() should return elapsed time since last successful callback."""
+def test_general_event_set_on_complete_packet():
+    """_general_event should be set when a complete general data packet is received."""
+    import asyncio
     dev = make_dev()
+    dev._general_event = asyncio.Event()
 
-    # Simulate a callback 30 seconds ago
-    dev.last_successful_callback_time = time.monotonic() - 30
-    age = dev.data_age()
-    assert 29 <= age <= 31, f"Expected ~30s, got {age}"
+    payload = bytearray(27)
+    packet = build_packet(0x03, bytes(payload))
+    dev._notification_handler(None, packet)
+
+    assert dev._general_event.is_set(), "_general_event should be set after complete general packet"
 
 
-def test_soft_reset_clears_state_and_increments_counter():
-    """soft_reset() should clear the state machine and increment the counter."""
+def test_events_none_by_default():
+    """Events should be None on a fresh device (set only at start of each read cycle)."""
     dev = make_dev()
-
-    # Put state machine in mid-reassembly
-    payload = bytes(8)
-    packet = build_packet(0x04, payload)
-    dev._notification_handler(None, packet[:6])
-    assert dev.last_state == "dd04"
-
-    dev.soft_reset()
-
-    assert dev.last_state == "0000"
-    assert dev.cellData is None
-    assert dev.generalData is None
-    assert dev.soft_reset_count == 1
-
-
-def test_soft_reset_count_and_reconnect_count_start_at_zero():
-    """Counters should be zero on fresh device."""
-    dev = make_dev()
-    assert dev.soft_reset_count == 0
-    assert dev.reconnect_count == 0
+    assert dev._general_event is None
+    assert dev._cell_event is None
 
 
 # ---------------------------------------------------------------------------
