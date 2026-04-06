@@ -7,7 +7,6 @@ from utils import *
 from struct import *
 import time
 import binascii
-import os
 
 # JBD BMS standard GATT UUIDs
 BLE_TX_UUID = "0000ff02-0000-1000-8000-00805f9b34fb"  # Write commands
@@ -16,6 +15,9 @@ BLE_RX_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"  # Receive notifications
 # JBD BMS command bytes
 CMD_GENERAL_INFO = b'\xdd\xa5\x03\x00\xff\xfd\x77'
 CMD_CELL_VOLTAGES = b'\xdd\xa5\x04\x00\xff\xfc\x77'
+
+# Seconds to wait for each notification response before giving up
+READ_TIMEOUT = 10.0
 
 
 class JbdProtection(Protection):
@@ -58,16 +60,15 @@ class JbdProtection(Protection):
 		)
 
 
-
 # Shared event loop for all BleakJbdDev instances.
 # bleak's dbus-fast backend binds internal state to the first loop it sees,
 # so all BLE coroutines must run on the same loop.
 _ble_loop: asyncio.AbstractEventLoop | None = None
 _ble_loop_lock = threading.Lock()
 
-# Serializes BLE connect/scan operations: BlueZ only allows one active
+# Serializes BLE connect operations: BlueZ only allows one active
 # discovery at a time, so concurrent connect() calls fail with InProgress.
-# Released once connected; polling runs concurrently without the lock.
+# Released once connected; reads run concurrently without the lock.
 _ble_connect_lock: asyncio.Lock | None = None
 
 
@@ -99,11 +100,14 @@ class BleakJbdDev:
 		self.address = address
 		self.interval = BT_POLL_INTERVAL
 		self.running = False
-		self.last_successful_callback_time = time.monotonic()
-		self.soft_reset_count = 0
-		self.reconnect_count = 0
+
+		# Set at the start of each read cycle; fired by the notification handler
+		# when a complete general/cell packet has been assembled and delivered.
+		self._general_event: asyncio.Event | None = None
+		self._cell_event: asyncio.Event | None = None
 
 	def reset(self):
+		"""Reset the notification state machine buffers for a fresh read cycle."""
 		self.last_state = "0000"
 		self.cellData = None
 		self.generalData = None
@@ -112,23 +116,6 @@ class BleakJbdDev:
 		self.generalDataTotalLen = 0
 		self.generalDataRemainingLen = 0
 		self._last_state_change_time = time.monotonic()
-
-	def data_age(self):
-		"""Seconds since last successful data callback."""
-		return time.monotonic() - self.last_successful_callback_time
-
-	def soft_reset(self):
-		"""Reset the notification handler state machine without disconnecting BLE."""
-		logger.info(f'Soft reset ({self.address}): clearing state machine')
-		self.last_state = "0000"
-		self.cellData = None
-		self.generalData = None
-		self.cellDataTotalLen = 0
-		self.cellDataRemainingLen = 0
-		self.generalDataTotalLen = 0
-		self.generalDataRemainingLen = 0
-		self._last_state_change_time = time.monotonic()
-		self.soft_reset_count += 1
 
 	def connect(self):
 		self.running = True
@@ -137,56 +124,56 @@ class BleakJbdDev:
 	async def _ble_main_loop(self):
 		while self.running:
 			client = BleakClient(self.address)
+			success = False
 			try:
 				logger.info('Connecting ' + self.address)
-				# Serialize the connect/scan phase — BlueZ allows only one
-				# active discovery at a time. Lock is released once connected
-				# so other batteries can connect while this one polls.
+				# Serialize the connect phase — BlueZ allows only one active
+				# discovery at a time. Lock is released once connected.
 				async with _ble_connect_lock:
 					await client.connect()
-
 				logger.info('Connected ' + self.address)
+
+				# Fresh events and clean state machine for this read cycle.
+				# JbdBt's generalData/cellData (set by callbacks) are not cleared
+				# here — the dbus poller continues to see the previous read's data
+				# until the new callbacks fire.
+				self._general_event = asyncio.Event()
+				self._cell_event = asyncio.Event()
 				self.reset()
+
 				await client.start_notify(BLE_RX_UUID, self._notification_handler)
 
-				while self.running and client.is_connected:
-					try:
-						await client.write_gatt_char(BLE_TX_UUID, CMD_GENERAL_INFO, response=True)
-						await asyncio.sleep(0.5)
-						await client.write_gatt_char(BLE_TX_UUID, CMD_CELL_VOLTAGES, response=True)
-					except Exception as ex:
-						logger.info(f'GATT write error ({self.address}): {ex}')
-						break
+				await client.write_gatt_char(BLE_TX_UUID, CMD_GENERAL_INFO, response=True)
+				await asyncio.wait_for(self._general_event.wait(), timeout=READ_TIMEOUT)
 
-					await asyncio.sleep(self.interval)
+				await asyncio.sleep(0.5)
 
-					# Tiered recovery based on data staleness
-					try:
-						age = self.data_age()
-						if BT_RECONNECT_TIMEOUT and age > BT_RECONNECT_TIMEOUT:
-							logger.warning(f'Data stale for {age:.0f}s ({self.address}), forcing BLE reconnect')
-							self.reconnect_count += 1
-							break  # exits inner loop → disconnect/reconnect in outer loop
-						elif BT_SOFT_RESET_TIMEOUT and age > BT_SOFT_RESET_TIMEOUT:
-							self.soft_reset()
-					except Exception as ex:
-						logger.warning(f'Recovery check error ({self.address}): {ex}')
+				await client.write_gatt_char(BLE_TX_UUID, CMD_CELL_VOLTAGES, response=True)
+				await asyncio.wait_for(self._cell_event.wait(), timeout=READ_TIMEOUT)
 
+				success = True
+
+			except asyncio.TimeoutError:
+				logger.warning(f'Read timeout ({self.address})')
 			except BleakError as ex:
 				logger.info('Connection failed: ' + str(ex))
 			except Exception as ex:
 				logger.info('BLE error: ' + str(ex))
 			finally:
-				await client.disconnect()
+				try:
+					await client.disconnect()
+				except Exception:
+					pass
 
 			if self.running:
-				logger.info('Disconnected')
-				await asyncio.sleep(3)
+				if success:
+					logger.info(f'Disconnected {self.address} (read complete, next in {self.interval}s)')
+				else:
+					logger.info(f'Disconnected {self.address}')
+				await asyncio.sleep(self.interval)
 
 	def stop(self):
 		self.running = False
-		if self._loop and self._loop.is_running():
-			self._loop.call_soon_threadsafe(self._loop.stop)
 
 	def addCellDataCallback(self, func):
 		self.cellDataCallback = func
@@ -258,19 +245,21 @@ class BleakJbdDev:
 		# Completion checks — use >= to handle oversized accumulation
 		if self.last_state == "dd04" and self.cellData and len(self.cellData) >= self.cellDataTotalLen:
 			self.cellDataCallback(self.cellData[:self.cellDataTotalLen])
-			self.last_successful_callback_time = time.monotonic()
 			logger.debug("cellData(" + str(self.cellDataTotalLen) + "): " + str(binascii.hexlify(self.cellData[:self.cellDataTotalLen]).decode('utf-8')))
 			self.last_state = "0000"
 			self._last_state_change_time = time.monotonic()
 			self.cellData = None
+			if self._cell_event:
+				self._cell_event.set()
 
 		if self.last_state == "dd03" and self.generalData and len(self.generalData) >= self.generalDataTotalLen:
 			self.generalDataCallback(self.generalData[:self.generalDataTotalLen])
-			self.last_successful_callback_time = time.monotonic()
 			logger.debug("generalData(" + str(self.generalDataTotalLen) + "): " + str(binascii.hexlify(self.generalData[:self.generalDataTotalLen]).decode('utf-8')))
 			self.last_state = "0000"
 			self._last_state_change_time = time.monotonic()
 			self.generalData = None
+			if self._general_event:
+				self._general_event.set()
 
 class JbdBt(Battery):
 	def __init__(self, address):
@@ -281,15 +270,11 @@ class JbdBt(Battery):
 
 		self.mutex = Lock()
 		self.generalData = None
-		self.generalDataTS = time.monotonic()
 		self.cellData = None
-		self.cellDataTS = time.monotonic()
 
 		self.address = address
 		self.port = "/bt" + address.replace(":", "")
 		self.interval = BT_POLL_INTERVAL
-		self.soft_reset_count = 0
-		self.reconnect_count = 0
 
 		dev = BleakJbdDev(self.address)
 		dev.addCellDataCallback(self.cellDataCB)
@@ -313,8 +298,6 @@ class JbdBt(Battery):
 	def refresh_data(self):
 		result = self.read_gen_data()
 		result = result and self.read_cell_data()
-		self.soft_reset_count = self._ble_dev.soft_reset_count
-		self.reconnect_count = self._ble_dev.reconnect_count
 		return result
 
 	def log_settings(self):
@@ -347,9 +330,6 @@ class JbdBt(Battery):
 		self.protection.set_short(is_bit_set(tmp[2]))
 
 	def to_cell_bits(self, byte_data, byte_data_high):
-		# clear the list
-		#for c in self.cells:
-		#	self.cells.remove(c)
 		self.cells: List[Cell] = []
 
 		# get up to the first 16 cells
@@ -370,7 +350,6 @@ class JbdBt(Battery):
 
 	def read_gen_data(self):
 		self.mutex.acquire()
-		self.checkTS(self.generalDataTS)
 
 		if self.generalData is None:
 			self.mutex.release()
@@ -417,7 +396,6 @@ class JbdBt(Battery):
 
 	def read_cell_data(self):
 		self.mutex.acquire()
-		self.checkTS(self.cellDataTS)
 
 		if self.cellData is None:
 			self.mutex.release()
@@ -442,41 +420,18 @@ class JbdBt(Battery):
 	def cellDataCB(self, data):
 		self.mutex.acquire()
 		self.cellData = data
-		self.cellDataTS = time.monotonic()
 		self.mutex.release()
 
 	def generalDataCB(self, data):
 		self.mutex.acquire()
 		self.generalData = data
-		self.generalDataTS = time.monotonic()
 		self.mutex.release()
-
-	def checkTS(self, ts):
-		elapsed = 0
-		if ts:
-			elapsed = time.monotonic() - ts
-
-		#if (int(elapsed) % 60) == 0:
-		#	logger.info(elapsed)
-
-		if BT_WATCHDOG_TIMER == 0:
-			return
-
-		if elapsed > BT_WATCHDOG_TIMER:
-			logger.info('Watchdog timer expired. BT chipset might be locked up. Rebooting')
-			os.system('reboot')
 
 
 # Unit test
 if __name__ == "__main__":
 
-
 	batt = JbdBt( "70:3e:97:07:e0:dd" )
-	#batt = JbdBt( "70:3e:97:07:e0:d9" )
-	#batt = JbdBt( "e0:9f:2a:fd:29:26" )
-	#batt = JbdBt( "70:3e:97:08:00:62" )
-	#batt = JbdBt( "a4:c1:37:40:89:5e" )
-	#batt = JbdBt( "a4:c1:37:00:25:91" )
 	batt.get_settings()
 
 	while True:
@@ -486,5 +441,3 @@ if __name__ == "__main__":
 			print( str(batt.cells[c].voltage) + "v", end=" " )
 		print("")
 		time.sleep(5)
-
-

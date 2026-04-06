@@ -52,12 +52,10 @@ def test_timing_cli_overrides():
 	"""CLI timing args override config defaults."""
 	args = run_parse([
 		'AA:BB:CC:DD:EE:FF',
-		'--bt-poll-interval', '10',
-		'--bt-watchdog-timer', '0',
+		'--bt-poll-interval', '60',
 		'--dbus-poll-interval', '1000',
 	])
-	assert args.bt_poll_interval == 10, f"Expected bt_poll_interval=10, got {args.bt_poll_interval}"
-	assert args.bt_watchdog_timer == 0, f"Expected bt_watchdog_timer=0, got {args.bt_watchdog_timer}"
+	assert args.bt_poll_interval == 60, f"Expected bt_poll_interval=60, got {args.bt_poll_interval}"
 	assert args.dbus_poll_interval == 1000, f"Expected dbus_poll_interval=1000, got {args.dbus_poll_interval}"
 	print("PASS test_timing_cli_overrides")
 
