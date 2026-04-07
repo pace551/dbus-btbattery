@@ -225,7 +225,10 @@ BMS_TYPE = config["DEFAULT"]["BMS_TYPE"]
 CONNECTION_MODE = config["DEFAULT"]["CONNECTION_MODE"]
 BT_ADDRESSES = _get_list_from_config("DEFAULT", "BT_ADDRESSES")
 BT_POLL_INTERVAL = int(config["DEFAULT"]["BT_POLL_INTERVAL"])
+BT_CONNECT_STAGGER = int(config["DEFAULT"]["BT_CONNECT_STAGGER"])
 DBUS_POLL_INTERVAL = int(config["DEFAULT"]["DBUS_POLL_INTERVAL"])
+BT_INIT_RETRY_INTERVAL = int(config["DEFAULT"]["BT_INIT_RETRY_INTERVAL"])
+BT_INIT_MAX_RETRIES = int(config["DEFAULT"]["BT_INIT_MAX_RETRIES"])
 
 
 def constrain(val, min_val, max_val):
@@ -235,6 +238,8 @@ def constrain(val, min_val, max_val):
 
 
 def mapRange(inValue, inMin, inMax, outMin, outMax):
+    if inMax == inMin:
+        return outMin
     return outMin + (((inValue - inMin) / (inMax - inMin)) * (outMax - outMin))
 
 
