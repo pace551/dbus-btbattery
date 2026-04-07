@@ -99,6 +99,7 @@ class BleakJbdDev:
 
 		self.address = address
 		self.interval = BT_POLL_INTERVAL
+		self.initial_delay = 0
 		self.running = False
 
 		# Set at the start of each read cycle; fired by the notification handler
@@ -119,9 +120,17 @@ class BleakJbdDev:
 
 	def connect(self):
 		self.running = True
-		asyncio.run_coroutine_threadsafe(self._ble_main_loop(), _get_ble_loop())
+		future = asyncio.run_coroutine_threadsafe(self._ble_main_loop(), _get_ble_loop())
+
+		def _on_ble_done(f):
+			if not f.cancelled() and f.exception():
+				logger.error("BLE loop for %s crashed: %s", self.address, f.exception())
+
+		future.add_done_callback(_on_ble_done)
 
 	async def _ble_main_loop(self):
+		if self.initial_delay > 0:
+			await asyncio.sleep(self.initial_delay)
 		while self.running:
 			success = False
 			client = BleakClient(self.address)
@@ -265,7 +274,7 @@ class BleakJbdDev:
 				self._general_event.set()
 
 class JbdBt(Battery):
-	def __init__(self, address):
+	def __init__(self, address, initial_delay=0):
 		Battery.__init__(self, 0, 0, address)
 
 		self.protection = JbdProtection()
@@ -280,6 +289,7 @@ class JbdBt(Battery):
 		self.interval = BT_POLL_INTERVAL
 
 		dev = BleakJbdDev(self.address)
+		dev.initial_delay = initial_delay
 		dev.addCellDataCallback(self.cellDataCB)
 		dev.addGeneralDataCallback(self.generalDataCB)
 		dev.connect()
@@ -290,10 +300,17 @@ class JbdBt(Battery):
 		return False
 
 	def get_settings(self):
+		deadline = time.monotonic() + BT_INIT_RETRY_INTERVAL
 		result = self.read_gen_data()
 		while not result:
-			result = self.read_gen_data()
+			if time.monotonic() >= deadline:
+				logger.warning(
+					"get_settings() timed out for %s — battery not available at startup",
+					self.address,
+				)
+				return False
 			time.sleep(1)
+			result = self.read_gen_data()
 		self.max_battery_charge_current = MAX_BATTERY_CHARGE_CURRENT
 		self.max_battery_discharge_current = MAX_BATTERY_DISCHARGE_CURRENT
 		return result
@@ -416,6 +433,11 @@ class JbdBt(Battery):
 				if len(cell_volts) != 0:
 					self.cells[c].voltage = cell_volts[0] / 1000
 			except error:
+				logger.warning(
+					"Cell %d voltage unpack failed for %s, setting to 0",
+					c,
+					self.address,
+				)
 				self.cells[c].voltage = 0
 
 		return True

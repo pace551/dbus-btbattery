@@ -125,7 +125,13 @@ class ParallelBattery(Battery):
 
 	def refresh_data(self):
 		# Refresh each sub-battery first
-		refresh_results = [b.refresh_data() for b in self.batts]
+		refresh_results = []
+		for b in self.batts:
+			try:
+				refresh_results.append(b.refresh_data())
+			except Exception:
+				logger.error("refresh_data() failed for %s", b.port, exc_info=True)
+				refresh_results.append(False)
 		any_refreshed = any(refresh_results)
 
 		# Then aggregate the now-fresh data

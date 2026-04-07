@@ -3,7 +3,6 @@ import sys
 import os
 import platform
 import dbus
-import traceback
 
 # Victron packages
 sys.path.insert(
@@ -84,8 +83,13 @@ class DbusHelper:
             # 'CCMCurrentLimitDischarge3': [path + '/CCMCurrentLimitDischarge3', '', 0, 100],
         }
 
-        self.settings = SettingsDevice(get_bus(), settings, self.handle_changed_setting)
+        try:
+            self.settings = SettingsDevice(get_bus(), settings, self.handle_changed_setting)
+        except Exception:
+            logger.error("SettingsDevice init failed for %s", self.battery.port, exc_info=True)
+            return False
         self.battery.role, self.instance = self.get_role_instance()
+        return True
 
     def get_role_instance(self):
         val = self.settings["instance"].split(":")
@@ -106,7 +110,8 @@ class DbusHelper:
         # Set up dbus service and device instance
         # and notify of all the attributes we intend to update
         # This is only called once when a battery is initiated
-        self.setup_instance()
+        if not self.setup_instance():
+            return False
         short_port = self.battery.port[self.battery.port.rfind("/") + 1 :]
         logger.info("%s" % ("com.victronenergy.battery." + short_port))
 
@@ -342,8 +347,16 @@ class DbusHelper:
                     loop.quit()
 
         except Exception:
-            traceback.print_exc()
-            loop.quit()
+            logger.error("Exception in publish_battery for %s", self.battery.port, exc_info=True)
+            self.error_count += 1
+            if self.error_count >= 10 and self.battery.online:
+                self.battery.online = False
+                try:
+                    self.publish_dbus()
+                except Exception:
+                    logger.warning("Could not publish offline status for %s", self.battery.port)
+            if self.error_count >= 60:
+                loop.quit()
 
     def publish_dbus(self):
 
@@ -474,8 +487,8 @@ class DbusHelper:
                     self.battery.get_max_cell_voltage()
                     - self.battery.get_min_cell_voltage()
                 )
-            except:
-                pass
+            except Exception:
+                logger.warning("Cell voltage publish failed for %s", self.battery.port, exc_info=True)
 
         # Update TimeToSoC
         try:
@@ -495,7 +508,7 @@ class DbusHelper:
                         if self.battery.current
                         else None
                     )
-                
+
                 # Update TimeToGo
                 self._dbusservice["/TimeToGo"] = (
                     self.battery.get_timetosoc(SOC_LOW_WARNING, crntPrctPerSec)
@@ -505,8 +518,8 @@ class DbusHelper:
 
             else:
                 self.battery.time_to_soc_update -= 1
-        except:
-            pass
+        except Exception:
+            logger.warning("TimeToSoC update failed for %s", self.battery.port, exc_info=True)
 
         logger.debug("logged to dbus [%s]" % str(round(self.battery.soc, 2)))
         self.battery.log_cell_data()
