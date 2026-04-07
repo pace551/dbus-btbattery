@@ -483,9 +483,10 @@ class DbusHelper:
                         voltageSum += voltage
                 pathbase = "Cell" if (BATTERY_CELL_DATA_FORMAT & 2) else "Voltages"
                 self._dbusservice["/%s/Sum" % pathbase] = voltageSum
+                max_v = self.battery.get_max_cell_voltage()
+                min_v = self.battery.get_min_cell_voltage()
                 self._dbusservice["/%s/Diff" % pathbase] = (
-                    self.battery.get_max_cell_voltage()
-                    - self.battery.get_min_cell_voltage()
+                    max_v - min_v if max_v is not None and min_v is not None else None
                 )
             except Exception:
                 logger.warning("Cell voltage publish failed for %s", self.battery.port, exc_info=True)
