@@ -260,6 +260,8 @@ class Battery(ABC):
             self.control_allow_discharge = True
 
     def calcMaxChargeCurrentReferringToCellVoltage(self) -> float:
+        if self.get_max_cell_voltage() is None:
+            return self.max_battery_charge_current
         try:
             if utils.LINEAR_LIMITATION_ENABLE:
                 return utils.calcLinearRelationship(
@@ -278,6 +280,8 @@ class Battery(ABC):
             return self.max_battery_charge_current
 
     def calcMaxDischargeCurrentReferringToCellVoltage(self) -> float:
+        if self.get_min_cell_voltage() is None:
+            return self.max_battery_discharge_current
         try:
             if utils.LINEAR_LIMITATION_ENABLE:
                 return utils.calcLinearRelationship(
