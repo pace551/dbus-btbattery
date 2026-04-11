@@ -101,6 +101,7 @@ class BleakJbdDev:
 		self.interval = BT_POLL_INTERVAL
 		self.initial_delay = 0
 		self.running = False
+		self.last_read_time: float = 0.0  # monotonic; 0 = never successfully read
 
 		# Set at the start of each read cycle; fired by the notification handler
 		# when a complete general/cell packet has been assembled and delivered.
@@ -142,7 +143,7 @@ class BleakJbdDev:
 				# producing read timeouts on the other batteries.
 				async with _ble_connect_lock:
 					try:
-						await client.connect()
+						await client.connect(timeout=BT_CONNECT_TIMEOUT)
 						logger.info('Connected ' + self.address)
 
 						# Fresh events and clean state machine for this read cycle.
@@ -164,6 +165,7 @@ class BleakJbdDev:
 						await asyncio.wait_for(self._cell_event.wait(), timeout=READ_TIMEOUT)
 
 						success = True
+						self.last_read_time = time.monotonic()
 					finally:
 						try:
 							await client.disconnect()

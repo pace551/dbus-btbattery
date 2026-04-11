@@ -3,6 +3,7 @@
 
 from dbus.mainloop.glib import DBusGMainLoop
 import sys
+import time
 
 from gi.repository import GLib as gobject
 
@@ -74,6 +75,25 @@ def main():
 		logger.info("Single battery mode")
 
 	mainloop = gobject.MainLoop()
+
+	if utils.BT_WATCHDOG_TIMEOUT > 0:
+		def watchdog():
+			now = time.monotonic()
+			for batt in batteries:
+				if batt._ble_dev.last_read_time == 0.0:
+					continue
+				elapsed = now - batt._ble_dev.last_read_time
+				if elapsed > utils.BT_WATCHDOG_TIMEOUT:
+					logger.error(
+						"Watchdog: %s has not completed a read in %.0fs, restarting",
+						batt._ble_dev.address,
+						elapsed,
+					)
+					mainloop.quit()
+					return False
+			return True
+
+		gobject.timeout_add(60_000, watchdog)
 
 	active_helpers = []
 	pending = []  # list of [JbdBt_instance, retry_count]
