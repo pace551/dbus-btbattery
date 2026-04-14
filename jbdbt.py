@@ -181,10 +181,15 @@ class BleakJbdDev:
 
 			if self.running:
 				if success:
-					logger.info(f'Disconnected {self.address} (read complete, next in {self.interval}s)')
+					sleep_for = self.interval
+					logger.info(f'Disconnected {self.address} (read complete, next in {sleep_for}s)')
 				else:
-					logger.info(f'Disconnected {self.address}')
-				await asyncio.sleep(self.interval)
+					# Before the first successful read, use a short retry so
+					# setup_vedbus() can see all batteries within its 30s window.
+					# After the first read, fall back to the normal poll interval.
+					sleep_for = BT_INIT_RETRY_INTERVAL if self.last_read_time == 0.0 else self.interval
+					logger.info(f'Disconnected {self.address} (failed, retry in {sleep_for}s)')
+				await asyncio.sleep(sleep_for)
 
 	def stop(self):
 		self.running = False
