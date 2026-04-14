@@ -370,6 +370,11 @@ class DbusHelper:
         )
         self._dbusservice["/Dc/0/Temperature"] = self.battery.get_temp()
         self._dbusservice["/Capacity"] = self.battery.get_capacity_remain()
+        # Keep InstalledCapacity current — for a parallel aggregate this can
+        # start low if some batteries miss the setup_vedbus() window and must
+        # self-correct once all batteries have connected and provided data.
+        if self.battery.capacity is not None:
+            self._dbusservice["/InstalledCapacity"] = self.battery.capacity
         self._dbusservice["/ConsumedAmphours"] = (
             0
             if self.battery.capacity is None
