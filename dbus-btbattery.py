@@ -156,6 +156,21 @@ def main():
 	except KeyboardInterrupt:
 		pass
 
+	# Graceful shutdown: disconnect any in-flight BleakClient so BlueZ
+	# doesn't carry stale GATT operations into the next process lifetime.
+	# Without this, repeated watchdog restarts accumulate BlueZ cruft until
+	# the adapter reports "No powered Bluetooth adapters found" and requires
+	# an HCI reset (see service/run) or a Cerbo reboot to recover.
+	logger.info("Shutting down BLE connections")
+	for batt in batteries:
+		try:
+			batt._ble_dev.shutdown()
+		except Exception:
+			logger.warning(
+				"Shutdown error for %s", batt._ble_dev.address, exc_info=True
+			)
+	logger.info("dbus-btbattery exited cleanly")
+
 
 if __name__ == "__main__":
 	main()

@@ -108,6 +108,11 @@ class BleakJbdDev:
 		self._general_event: asyncio.Event | None = None
 		self._cell_event: asyncio.Event | None = None
 
+		# Active BleakClient during a connect-read-disconnect cycle; None when
+		# idle between cycles. Tracked so shutdown() can cleanly disconnect
+		# any in-flight GATT session before the process exits.
+		self._current_client = None
+
 	def reset(self):
 		"""Reset the notification state machine buffers for a fresh read cycle."""
 		self.last_state = "0000"
@@ -134,7 +139,8 @@ class BleakJbdDev:
 			await asyncio.sleep(self.initial_delay)
 		while self.running:
 			success = False
-			client = BleakClient(self.address)
+			client = BleakClient(self.address, adapter=BT_ADAPTER or None)
+			self._current_client = client
 			logger.info('Connecting ' + self.address)
 			try:
 				# Hold the lock for the entire connect-read-disconnect cycle so
@@ -178,6 +184,8 @@ class BleakJbdDev:
 				logger.info('Connection failed: ' + str(ex))
 			except Exception as ex:
 				logger.info('BLE error: ' + str(ex))
+			finally:
+				self._current_client = None
 
 			if self.running:
 				if success:
@@ -193,6 +201,36 @@ class BleakJbdDev:
 
 	def stop(self):
 		self.running = False
+
+	def shutdown(self, timeout: float = 3.0) -> None:
+		"""Request graceful shutdown: stop looping and disconnect any active
+		BleakClient so BlueZ doesn't carry stale GATT operations into the
+		next process lifetime.
+
+		Safe to call from any thread. Best-effort: swallows all exceptions
+		and returns within ``timeout`` seconds even if the disconnect hangs.
+		"""
+		self.running = False
+		client = self._current_client
+		if client is None:
+			return
+		loop = _ble_loop
+		if loop is None or not loop.is_running():
+			return
+		try:
+			future = asyncio.run_coroutine_threadsafe(
+				self._disconnect_async(client), loop
+			)
+			future.result(timeout=timeout)
+		except Exception:
+			pass
+
+	async def _disconnect_async(self, client) -> None:
+		try:
+			if client.is_connected:
+				await client.disconnect()
+		except Exception:
+			pass
 
 	def addCellDataCallback(self, func):
 		self.cellDataCallback = func
