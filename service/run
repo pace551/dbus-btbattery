@@ -1,5 +1,15 @@
 #!/bin/sh
 exec 2>&1
+
+# Reset the BLE adapter before startup to clear any stale BlueZ state left
+# by a prior unclean exit (e.g. watchdog-triggered kill mid-GATT-cycle).
+# Without this, BlueZ accumulates `[org.bluez.Error.InProgress]` references
+# until the adapter reports "No powered Bluetooth adapters found" to bleak
+# and only a Cerbo reboot recovers. See issue #42.
+BT_ADAPTER=$(python3 -c "import configparser; c=configparser.ConfigParser(); c.read(['/opt/victronenergy/dbus-btbattery/default_config.ini', '/data/dbus-btbattery/config.ini']); print(c.get('DEFAULT', 'BT_ADAPTER', fallback='hci1').strip())" 2>/dev/null || echo "hci1")
+hciconfig "$BT_ADAPTER" reset 2>/dev/null || true
+sleep 2
+
 # Single battery:
 # exec /opt/victronenergy/dbus-btbattery/dbus-btbattery.py 70:3e:97:08:00:62
 # Parallel batteries:

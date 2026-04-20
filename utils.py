@@ -223,6 +223,7 @@ BMS_TYPE = config["DEFAULT"]["BMS_TYPE"]
 
 # Connection settings
 CONNECTION_MODE = config["DEFAULT"]["CONNECTION_MODE"]
+BT_ADAPTER = config["DEFAULT"]["BT_ADAPTER"].strip()
 BT_ADDRESSES = _get_list_from_config("DEFAULT", "BT_ADDRESSES")
 BT_POLL_INTERVAL = int(config["DEFAULT"]["BT_POLL_INTERVAL"])
 BT_CONNECT_STAGGER = int(config["DEFAULT"]["BT_CONNECT_STAGGER"])
