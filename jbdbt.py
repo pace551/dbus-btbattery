@@ -226,9 +226,14 @@ class BleakJbdDev:
 			pass
 
 	async def _disconnect_async(self, client) -> None:
+		# Call disconnect() unconditionally — bleak tolerates it on a
+		# not-yet-connected client, and it's specifically needed when
+		# connect() is hanging (is_connected == False) so BlueZ gets a
+		# signal to abort the pending GATT operation. Without this the
+		# stale BlueZ state survives the process restart and wedges the
+		# next lifetime's connection attempts.
 		try:
-			if client.is_connected:
-				await client.disconnect()
+			await client.disconnect()
 		except Exception:
 			pass
 

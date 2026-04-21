@@ -77,16 +77,26 @@ def main():
 	mainloop = gobject.MainLoop()
 
 	if utils.BT_WATCHDOG_TIMEOUT > 0:
+		process_start_time = time.monotonic()
+
 		def watchdog():
 			now = time.monotonic()
 			for batt in batteries:
 				if batt._ble_dev.last_read_time == 0.0:
-					continue
-				elapsed = now - batt._ble_dev.last_read_time
+					# Never read — check against process start instead of
+					# skipping. Without this, a wedge that prevents the first
+					# read after a restart traps the process forever because
+					# the watchdog has no timestamp to compare against.
+					elapsed = now - process_start_time
+					reason = "no reads since startup"
+				else:
+					elapsed = now - batt._ble_dev.last_read_time
+					reason = "no read"
 				if elapsed > utils.BT_WATCHDOG_TIMEOUT:
 					logger.error(
-						"Watchdog: %s has not completed a read in %.0fs, restarting",
+						"Watchdog: %s — %s in %.0fs, restarting",
 						batt._ble_dev.address,
+						reason,
 						elapsed,
 					)
 					mainloop.quit()
@@ -146,6 +156,17 @@ def main():
 						still_pending.append([batt, retry_count])
 			pending.clear()
 			pending.extend(still_pending)
+
+			# If every battery gave up with nothing registered, exit so the
+			# watchdog-driven restart cycle retries with a fresh process and
+			# fresh HCI reset. Without this, a wedge at startup permanently
+			# traps the service with no D-Bus presence even if BLE later
+			# recovers on its own.
+			if len(pending) == 0 and len(active_helpers) == 0:
+				logger.error("All batteries failed initial setup, exiting service")
+				mainloop.quit()
+				return False
+
 			return len(pending) > 0  # False stops the GLib timer
 
 		gobject.timeout_add(utils.BT_INIT_RETRY_INTERVAL * 1000, retry_pending)
