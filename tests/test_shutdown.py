@@ -119,8 +119,11 @@ def test_shutdown_disconnects_active_client():
         cleanup()
 
 
-def test_shutdown_skips_disconnect_when_client_not_connected():
-    """If client.is_connected is False, we should not call disconnect()."""
+def test_shutdown_calls_disconnect_even_when_not_connected():
+    """A hung connect() holds is_connected=False while a GATT operation is
+    still pending in BlueZ. We must call disconnect() anyway to signal
+    BlueZ to abort the pending op — otherwise the stale GATT state
+    survives into the next process lifetime and re-wedges the adapter."""
     loop, cleanup = _run_loop_in_thread()
     try:
         dev = BleakJbdDev("AA:BB:CC:DD:EE:FF")
@@ -131,13 +134,14 @@ def test_shutdown_skips_disconnect_when_client_not_connected():
             disconnect_called.set()
 
         mock_client = MagicMock()
-        mock_client.is_connected = False
+        mock_client.is_connected = False   # mid-connect, not yet connected
         mock_client.disconnect = fake_disconnect
         dev._current_client = mock_client
 
         dev.shutdown(timeout=1.0)
 
-        assert not disconnect_called.is_set(), "disconnect() should be skipped when not connected"
+        assert disconnect_called.is_set(), \
+            "disconnect() must be called even on hung-connect clients"
     finally:
         cleanup()
 
