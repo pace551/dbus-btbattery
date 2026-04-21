@@ -188,19 +188,33 @@ class BleakJbdDev:
 				self._current_client = None
 
 			if self.running:
+				sleep_for = self._next_sleep(success)
 				if success:
-					sleep_for = self.interval
 					logger.info(f'Disconnected {self.address} (read complete, next in {sleep_for}s)')
 				else:
-					# Before the first successful read, use a short retry so
-					# setup_vedbus() can see all batteries within its 30s window.
-					# After the first read, fall back to the normal poll interval.
-					sleep_for = BT_INIT_RETRY_INTERVAL if self.last_read_time == 0.0 else self.interval
 					logger.info(f'Disconnected {self.address} (failed, retry in {sleep_for}s)')
 				await asyncio.sleep(sleep_for)
 
 	def stop(self):
 		self.running = False
+
+	def _next_sleep(self, success: bool) -> float:
+		"""Seconds to sleep after a read cycle.
+
+		On failure, add self.initial_delay (index * BT_CONNECT_STAGGER) to
+		re-establish the startup stagger. Without this, batteries that
+		fail simultaneously (e.g. during a BlueZ wedge) also retry
+		simultaneously — losing the time-offset that kept concurrent GATT
+		traffic manageable. See issue #48.
+		"""
+		if success:
+			return self.interval
+		# Before the first successful read, use the shorter init-retry
+		# interval so setup_vedbus() can see all batteries within its
+		# bounded wait. After the first read, fall back to the normal
+		# poll interval.
+		base = BT_INIT_RETRY_INTERVAL if self.last_read_time == 0.0 else self.interval
+		return base + self.initial_delay
 
 	def shutdown(self, timeout: float = 3.0) -> None:
 		"""Request graceful shutdown: stop looping and disconnect any active
