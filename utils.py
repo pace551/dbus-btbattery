@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import logging
+import os
 
 import configparser
 from pathlib import Path
@@ -223,7 +224,14 @@ BMS_TYPE = config["DEFAULT"]["BMS_TYPE"]
 
 # Connection settings
 CONNECTION_MODE = config["DEFAULT"]["CONNECTION_MODE"]
-BT_ADAPTER = config["DEFAULT"]["BT_ADAPTER"].strip()
+# BT_ADAPTER: service/run resolves BT_ADAPTER_MAC to an hciN name and exports
+# it via env var; env takes precedence over the config value so the Python
+# process uses the same adapter the shell reset. Empty → bleak default.
+BT_ADAPTER = (
+    os.environ.get("BT_ADAPTER")
+    or config["DEFAULT"].get("BT_ADAPTER", "")
+).strip()
+BT_ADAPTER_MAC = config["DEFAULT"].get("BT_ADAPTER_MAC", "").strip()
 BT_ADDRESSES = _get_list_from_config("DEFAULT", "BT_ADDRESSES")
 BT_POLL_INTERVAL = int(config["DEFAULT"]["BT_POLL_INTERVAL"])
 BT_CONNECT_STAGGER = int(config["DEFAULT"]["BT_CONNECT_STAGGER"])
