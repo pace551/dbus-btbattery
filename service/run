@@ -41,6 +41,23 @@ if [ -n "$BT_ADAPTER_MAC" ]; then
     fi
 fi
 
+# Ensure bluetoothd is running. Venus manages it via SysV init (no auto-
+# restart on crash). When bluetoothd dies — e.g. SIGABRT after prolonged LE
+# scan failures on a wedged adapter — every BLE connect call fails with
+# `org.freedesktop.DBus.Error.ServiceUnknown: org.bluez was not provided`,
+# our watchdog restarts the process, but nothing brings bluetoothd back.
+# service/run is the only hook where we can recover this without a reboot.
+if ! pidof bluetoothd >/dev/null; then
+    echo "[run] bluetoothd not running; starting via /etc/init.d/bluetooth"
+    /etc/init.d/bluetooth start
+    sleep 3
+    if pidof bluetoothd >/dev/null; then
+        echo "[run] bluetoothd started"
+    else
+        echo "[run] WARN: bluetoothd failed to start"
+    fi
+fi
+
 # Reset the adapter to clear any stale BlueZ state from a prior unclean exit.
 if [ -n "$BT_ADAPTER" ]; then
     echo "[run] resetting $BT_ADAPTER..."
